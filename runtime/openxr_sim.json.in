@@ -1,0 +1,7 @@
+{
+    "file_format_version": "1.0.0",
+    "runtime": {
+        "name": "openxr-sim",
+        "library_path": "@OPENXR_SIM_MANIFEST_LIBRARY@"
+    }
+}

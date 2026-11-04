@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The openxr-sim authors
+//
+// The Vulkan functions the runtime calls on the application's device, as VK_FN(name). Included with
+// VK_FN defined: once to declare the members of `struct vk`, once to load them. No include guard.
+VK_FN(vkGetDeviceQueue)
+VK_FN(vkCreateImage)
+VK_FN(vkDestroyImage)
+VK_FN(vkGetImageMemoryRequirements)
+VK_FN(vkAllocateMemory)
+VK_FN(vkFreeMemory)
+VK_FN(vkBindImageMemory)
+VK_FN(vkCreateBuffer)
+VK_FN(vkDestroyBuffer)
+VK_FN(vkGetBufferMemoryRequirements)
+VK_FN(vkBindBufferMemory)
+VK_FN(vkMapMemory)
+VK_FN(vkUnmapMemory)
+VK_FN(vkInvalidateMappedMemoryRanges)
+VK_FN(vkCreateCommandPool)
+VK_FN(vkDestroyCommandPool)
+VK_FN(vkAllocateCommandBuffers)
+VK_FN(vkResetCommandBuffer)
+VK_FN(vkBeginCommandBuffer)
+VK_FN(vkEndCommandBuffer)
+VK_FN(vkCmdPipelineBarrier)
+VK_FN(vkCmdCopyImageToBuffer)
+VK_FN(vkQueueSubmit)
+VK_FN(vkCreateFence)
+VK_FN(vkDestroyFence)
+VK_FN(vkWaitForFences)
+VK_FN(vkResetFences)
