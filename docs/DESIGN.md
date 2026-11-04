@@ -191,7 +191,7 @@ Segoe UI Semibold and Consolas on Windows (`sim/os.hpp`) -- the only platform co
 Linux (x86-64; Vulkan, OpenGL through EGL or GLX, OpenGL ES through EGL), and Windows (x86-64) being
 added: D3D11, then OpenGL through WGL, Vulkan, D3D12. Everything the runtime asks of the system is `runtime/plat.h`
 (`plat_posix.c`, `plat_win32.c`); the window's, `sim/os.hpp`, `sim/link.cpp` and `sim/control.cpp`. Windows
-is built from Linux with Visual Studio's build tools under Wine (`CMakePresets.json`).
+will be built from Linux with Visual Studio's build tools under Wine.
 
 ## The control socket (0.6.0)
 

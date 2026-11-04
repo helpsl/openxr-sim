@@ -559,7 +559,7 @@ int main(int argc, char** argv) {
             r["serverInfo"]["name"] = "openxr-sim";
             r["serverInfo"]["version"] = kVersion;
             r["instructions"] =
-                "Drives LOS's simulated OpenXR headset. A simulator exists while an OpenXR application has a session on it: "
+                "Drives openxr-sim's simulated OpenXR headset. A simulator exists while an OpenXR application has a session on it: "
                 "start one with launch (or find one with list_simulators), then screenshot to see the eyes, move/turn/set_pose "
                 "to look and reach, press/hold/release for the controllers' buttons. Poses are in STAGE metres, yaw positive "
                 "to the left.";
