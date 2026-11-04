@@ -278,3 +278,27 @@ private bus answering light and (0.47, 0.565, 0.533), the window logged (`OPENXR
 light; accent #789088"; with no portal, "no preference" and its own accent. In the LOS VM, installed from
 the package: the compositor's title bar over the window (once los-compositor 0.54.11 fitted a window too
 big for the screen inside its frame, not under it), and "scheme: dark".
+
+## WebXR in Chrome on Linux (2026-11-04)
+
+Chrome 157 on Linux carries its own OpenXR loader (it reads `XR_RUNTIME_JSON` and the `active_runtime.json`
+search path) with a Vulkan binding, `XR_KHR_vulkan_enable2`, but two things stand between a WebXR page and
+this runtime:
+
+* **The `OpenXR` feature is off by default**: without `--enable-features=OpenXR`,
+  `navigator.xr.isSessionSupported('immersive-vr')` is false and the runtime is never loaded.
+* **The XR service runs sandboxed**, where the runtime can neither read the configuration file (it saw
+  device "null"; `OPENXR_SIM_DEVICE=sim` in the environment does reach it) nor find the simulator to start
+  it ("the simulator ... is not there"). Which process that is on Linux is NOT established. If it is the
+  GPU process, `--disable-gpu-sandbox` would lift only that sandbox -- untested.
+  `--no-sandbox` is NOT the way: Chrome then opened the GPU in the browser process, where Mesa's lavapipe
+  failed to create its anonymous memory file and crashed on the error path (zink enumerating devices under
+  `gbm_create_device`) before any page loaded.
+
+Not yet seen working: no WebXR session has reached this runtime. The candidate, in a profile of its own:
+
+    XR_RUNTIME_JSON=.../build/test_runtime.json OPENXR_SIM_EXE=.../build/openxr-sim OPENXR_SIM_DEVICE=sim \
+    chrome --user-data-dir=/tmp/xr-profile --enable-features=OpenXR --disable-gpu-sandbox URL
+
+Open: working inside the GPU sandbox, so a browser needs only the feature flag -- the simulator started
+outside Chrome, and the runtime reaching it by whatever that sandbox leaves open.
