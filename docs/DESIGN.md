@@ -180,8 +180,8 @@ Segoe UI Semibold and Consolas on Windows (`sim/os.hpp`) -- the only platform co
   roles, never a colour or a size.
 * **The desktop's look** (`sim/os.hpp`, `desktop_appearance`; `sim/ui.cpp`, `set_theme`): light or dark and
   the accent are the desktop's, asked of it in the standard way -- on Linux the XDG portal's
-  `org.freedesktop.appearance` `color-scheme` and `accent-color`, which GNOME and KDE answer (LOS the
-  scheme only, so far: NOTES.md, 0.7.1); on Windows
+  `org.freedesktop.appearance` `color-scheme` and `accent-color`, which GNOME, KDE and LOS answer
+  (LOS with its own backend: NOTES.md, 0.7.1); on Windows
   the personalisation settings. The neutrals are LOS's palette's, copied as numbers (nothing of LOS's is
   linked), so on LOS the window and the compositor's frame round it are one surface. No answer: dark, and
   LOS's default accent. `--screenshot`, `--layout-check` and the headless test do not ask: the same picture

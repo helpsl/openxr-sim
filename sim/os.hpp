@@ -31,7 +31,7 @@ bool make_parent_dirs(const std::string& path);
 // THE DESKTOP'S APPEARANCE: light or dark, and the person's accent colour, so the window looks like the
 // desktop it is on (sim/ui.cpp, set_theme). Asked of the desktop, never of any one desktop's own files:
 //   Linux    the XDG desktop portal's Settings, org.freedesktop.appearance color-scheme and accent-color,
-//            which GNOME and KDE answer (LOS: the scheme; its backend has no accent-color yet) --
+//            which GNOME, KDE and LOS answer (LOS since its los-portal 0.1.0) --
 //            os_posix.cpp, ask_portal. A desktop with no portal
 //            answers nothing, and the window keeps its own dark theme.
 //   Windows  AppsUseLightTheme and the DWM colourisation colour.

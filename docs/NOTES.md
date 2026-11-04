@@ -261,9 +261,11 @@ shouldn't link against any LOS code, could it grab them from xdg or something si
   off (as los-shell asks, for a reason a shell has and an application does not) the window was told "no
   preference" by a portal that, once started, said dark. Not reading LOS's own configuration is the point:
   it would tie this project to that file's format.
-* **On LOS the accent does not arrive yet.** LOS's portal backend is xdg-desktop-portal-gtk 1.15.3, which
-  answers `color-scheme` and `contrast` and has no `accent-color` at all (`src/settings.c`); NotFound, and
-  the window uses its own (LOS's default, terracotta). GNOME's and KDE's backends answer it.
+* **On LOS the accent needed a backend of LOS's own.** xdg-desktop-portal-gtk 1.15.3 answers `color-scheme`
+  and `contrast` and has no `accent-color` at all (`src/settings.c`): NotFound, and the window used its own.
+  LOS answered by adding one, not by this project reading LOS's files: los-portal 0.1.0
+  (`xdg-desktop-portal-los`), asked before gtk, answers the person's exact accent. In the LOS VM with it
+  installed and the accent set to eucalyptus: "scheme: dark; accent #789088" -- LOS's (120, 144, 136).
 * **The neutrals no standard publishes**: surface, card, field, text, separator are LOS's
   (`los::palette_from`) as numbers in `sim/ui.cpp`. The text on a filled control is chosen by the fill's
   luma (`ui::on`), since the accent is anyone's now.
