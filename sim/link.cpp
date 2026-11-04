@@ -4,16 +4,24 @@
 
 #include "composite.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <format>
 
 namespace oxs {
 
@@ -139,12 +147,71 @@ void Link::compose_eye(const oxs_shm_slot& s, uint32_t slot, uint32_t e, const o
     }
 }
 
+#ifdef _WIN32
+
+Link::~Link() {
+    if (shm_ != nullptr) UnmapViewOfFile(shm_);
+    if (pipe_ != nullptr) CloseHandle(pipe_);
+}
+
+bool Link::attach(const std::string& link, std::string* error) {
+    unsigned long long shm_h = 0, pipe_h = 0;
+    if (std::sscanf(link.c_str(), "%llu,%llu", &shm_h, &pipe_h) != 2 || shm_h == 0 || pipe_h == 0) {
+        *error = "no --link SHM,PIPE -- the OpenXR runtime starts this with --headset";
+        return false;
+    }
+    HANDLE mapping = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(shm_h));
+    void* m = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+    if (m == nullptr) { *error = std::format("could not map the shared memory (error {})", GetLastError()); return false; }
+    MEMORY_BASIC_INFORMATION mbi{};
+    VirtualQuery(m, &mbi, sizeof mbi);
+    auto* shm = static_cast<oxs_shm*>(m);
+    if (mbi.RegionSize < oxs_shm_size() || shm->magic != OXS_SHM_MAGIC || shm->version != OXS_SHM_VERSION ||
+        shm->slots != OXS_SLOTS || shm->eye_max != OXS_EYE_MAX || shm->size > mbi.RegionSize) {
+        UnmapViewOfFile(m);
+        *error = "the shared memory is not this version's (the runtime and openxr-sim must come from one build)";
+        return false;
+    }
+    CloseHandle(mapping);   // the view keeps it
+    shm_ = shm;
+    size_ = static_cast<size_t>(mbi.RegionSize);
+    pipe_ = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(pipe_h));
+    return true;
+}
+
+int Link::wait(int timeout_ms) {
+    if (pipe_ == nullptr) return -1;
+    // An anonymous pipe cannot be waited on with a timeout, but it can be asked how much is in it.
+    const ULONGLONG until = timeout_ms < 0 ? ~0ULL : GetTickCount64() + static_cast<ULONGLONG>(timeout_ms);
+    for (;;) {
+        DWORD avail = 0;
+        if (!PeekNamedPipe(pipe_, nullptr, 0, nullptr, &avail, nullptr)) return -1;   // broken: the runtime has gone
+        if (avail > 0) {
+            char buf[64];
+            DWORD n = 0;
+            while (avail > 0 && ReadFile(pipe_, buf, avail < sizeof buf ? avail : sizeof buf, &n, nullptr) && n > 0) {
+                avail -= n;
+            }
+            return 1;
+        }
+        if (GetTickCount64() >= until) return 0;
+        Sleep(1);
+    }
+}
+
+void Link::interrupt() {
+    if (pipe_ != nullptr) { CloseHandle(pipe_); pipe_ = nullptr; }
+}
+
+#else
+
 Link::~Link() {
     if (shm_ != nullptr) munmap(shm_, size_);
     if (sock_ >= 0) close(sock_);
 }
 
-bool Link::attach(int shm_fd, int socket_fd, std::string* error) {
+bool Link::attach(const std::string&, std::string* error) {
+    const int shm_fd = OXS_SHM_FD, socket_fd = OXS_SOCKET_FD;
     struct stat st{};
     if (fstat(shm_fd, &st) != 0) { *error = "no shared memory on descriptor 3 -- the OpenXR runtime starts this with --headset"; return false; }
     if (!S_ISREG(st.st_mode) || static_cast<uint64_t>(st.st_size) < oxs_shm_size()) {
@@ -157,26 +224,40 @@ bool Link::attach(int shm_fd, int socket_fd, std::string* error) {
     if (shm->magic != OXS_SHM_MAGIC || shm->version != OXS_SHM_VERSION || shm->slots != OXS_SLOTS ||
         shm->eye_max != OXS_EYE_MAX || shm->size > static_cast<uint64_t>(st.st_size)) {
         munmap(m, static_cast<size_t>(st.st_size));
-        *error = "the shared memory is not this version's (openxr-sim and openxr-sim must come from one package)";
+        *error = "the shared memory is not this version's (the runtime and openxr-sim must come from one build)";
         return false;
     }
     close(shm_fd);
     shm_ = shm;
     size_ = static_cast<size_t>(st.st_size);
     sock_ = socket_fd;
+    fcntl(sock_, F_SETFD, FD_CLOEXEC);
     return true;
 }
 
-bool Link::drain() {
-    if (sock_ < 0) return false;
-    char buf[64];
+int Link::wait(int timeout_ms) {
+    if (sock_ < 0) return -1;
+    pollfd p{ sock_, POLLIN, 0 };
+    const int r = ::poll(&p, 1, timeout_ms);
+    if (r < 0) return errno == EINTR ? 0 : -1;
+    if (r == 0) return 0;
+    bool woke = false;
     for (;;) {
-        const ssize_t r = recv(sock_, buf, sizeof buf, MSG_DONTWAIT);
-        if (r > 0) continue;
-        if (r == 0) return false;
-        return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+        char buf[64];
+        const ssize_t n = recv(sock_, buf, sizeof buf, MSG_DONTWAIT);
+        if (n > 0) { woke = true; continue; }
+        if (n == 0) return -1;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return woke ? 1 : 0;
+        return -1;
     }
 }
+
+void Link::interrupt() {
+    if (sock_ >= 0) ::shutdown(sock_, SHUT_RDWR);
+}
+
+#endif
 
 bool Link::take_frame(int max_w, int max_h, EyePixels out[2]) {
     if (shm_ == nullptr) return false;

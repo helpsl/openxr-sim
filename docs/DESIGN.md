@@ -1,6 +1,7 @@
 # openxr-sim: the simulated headset (design)
 
-The owner, 2026-10-01: "a dummy openxr runtime package for LOS, which when identified by an openxr app will
+Written for LOS, where it began as `apps/los-openxr`; its own repository since 0.7.0 (2026-11-04), for
+Linux and Windows. The owner, 2026-10-01: "a dummy openxr runtime package for LOS, which when identified by an openxr app will
 just come back with a disconnected openxr headset. Later on I might expand this to provide a simulated OpenXR
 device such as something like https://github.com/meta-quest/immersive-web-emulator/". The first half is
 0.1.0 (`NOTES.md`). This is the second, asked for on 2026-10-21: an OpenXR application runs as it would on a
@@ -12,19 +13,23 @@ pressed with the mouse and keyboard.
 * **The runtime** (`libopenxr_sim.so`, C) is loaded INTO the application by the OpenXR loader. It owns
   everything OpenXR: sessions and their states, frame timing, swapchains in the application's own graphics
   API, spaces, views, actions and their bindings. It knows nothing about windows or input devices.
-* **The simulator** (`openxr-sim`, C++, los-ui) is a desktop window. It shows what the application
+* **The simulator** (`openxr-sim`, C++: GLFW, Clay, drawn in software -- "The window's toolkit") is a desktop window. It shows what the application
   rendered, and it is where the headset's and the controllers' poses and buttons come from.
 
-The runtime starts the simulator when a session is created and hands it two descriptors: a shared-memory
-file (frames one way, the simulated devices' state the other) and a socket (wake-ups, and "the window was
-closed"). A child of the application, not a service found by name, so it works the same inside a confined
+The runtime starts the simulator when a session is created and hands it two things: a shared-memory
+region (frames one way, the simulated devices' state the other) and a wake channel (wake-ups, and "the
+window was closed") -- on Linux a memfd and a socket pair, descriptors 3 and 4 in the child; on Windows a
+file mapping and an anonymous pipe, inherited and named on its command line (`runtime/plat.h`). A child of the application, not a service found by name, so it works the same inside a confined
 application's view, under Wine (wineopenxr hands every call to the Linux loader in the same process), and
 with nothing installed but the package. Closing the window is the person taking the headset off: the
 session is asked to exit (`STOPPING`), as `xrRequestExitSession` would.
 
 ## Choosing the device
 
-`OPENXR_SIM_DEVICE` (`null` or `sim`), else `device =` in `~/.config/los/openxr`, else `null`. The default
+`OPENXR_SIM_DEVICE` (`null` or `sim`), else `device =` in the configuration file --
+`$XDG_CONFIG_HOME/openxr-sim/config` (`~/.config/openxr-sim/config`), `%APPDATA%\openxr-sim\config` on
+Windows -- else `null`. Until 2027-05-01 the names from before the split are read too, after these:
+`LOS_OPENXR_DEVICE`, and `~/.config/los/openxr` when the new file does not exist. The default
 stays the disconnected headset: a simulator window appearing because a game probed for VR would be a
 surprise. `openxr-sim --use` / `--unuse` write the setting.
 
@@ -40,7 +45,7 @@ surprise. `openxr-sim --use` / `--unuse` write the setting.
 * Reference spaces VIEW, LOCAL, STAGE and LOCAL_FLOOR. LOCAL is where the head was when the session began.
 * Two controllers. The application's suggested bindings decide which controller they claim to be: the
   first suggested of Touch, Touch Plus, Index, Vive, Windows Mixed Reality and the simple controller, else
-  whatever it suggested first (`input_choose_profile`, src/input.c). A binding is answered by what its path names (`trigger`, `squeeze`, `thumbstick`, `a`,
+  whatever it suggested first (`input_choose_profile`, runtime/input.c). A binding is answered by what its path names (`trigger`, `squeeze`, `thumbstick`, `a`,
   `menu`, `grip/pose` ...), so one simulated controller serves every profile.
 
 ## Frames: copied, not shared
@@ -81,7 +86,7 @@ does three things:
 * resolves each layer for each eye: its pose in STAGE at the display time, and its sub-image;
 * copies the sub-images into the frame's slot (`sim_protocol.h`, version 2).
 
-The simulator then draws each eye at the size the window shows it (`src/composite.c`). Each of its
+The simulator then draws each eye at the size the window shows it (`common/composite.c`). Each of its
 pixels is a ray from the eye: into a quad's plane (front face only), the inside of a cylinder, a sphere
 or, with no radius, a direction for an equirect, or another projection's view. Only the rectangle a
 layer's outline projects to is visited.
@@ -94,14 +99,14 @@ Measured, a 466-pixel eye (the window's): a metre quad at 1.5 m costs 0.75 ms; a
 
 ## Hand tracking
 
-Since 0.4.0, `XR_EXT_hand_tracking`: the 26 joints of each hand (`src/hand.c`), with no change to the
+Since 0.4.0, `XR_EXT_hand_tracking`: the 26 joints of each hand (`runtime/hand.c`), with no change to the
 simulator. It has no hands of its own, so a hand is a fixed skeleton held round each controller:
 
 * **Placed on the grip pose.** The skeleton is built in its palm's frame -- every joint's -Z down its bone
   towards the tip, +Y out of the back of the hand, the extension's own convention -- and laid on the
   controller (`palm_on_grip`): the palm against the handle's side, the handle across it, 3 cm under it
   and 5 cm towards the fingers. The left hand is the right one mirrored in the grip's YZ plane.
-* **The grip is OpenXR's grip** (`oxs_hand_poses`, src/xrmath.h): its -Z along the handle through the
+* **The grip is OpenXR's grip** (`oxs_hand_poses`, common/xrmath.h): its -Z along the handle through the
   fist, rising 60 degrees above where the hand points; the aim pose is the pointing itself, 5 cm ahead.
 * **Curled by what is held.** The trigger curls the index, the grip the other three, a face button or
   the stick puts the thumb down. A full curl lays every finger joint 2.7 cm from the handle's axis, each
@@ -114,7 +119,7 @@ simulator. It has no hands of its own, so a hand is a fixed skeleton held round 
 ## Hand interaction
 
 Since 0.5.0, `XR_EXT_hand_interaction` (spec version 2): the hands as an interaction profile, answered by
-the same simulated controller (`src/input.c`), with no change to the simulator.
+the same simulated controller (`runtime/input.c`), with no change to the simulator.
 
 * **`/interaction_profiles/ext/hand_interaction_ext` is chosen last.** It comes after every controller's
   profile in `PREFERRED_PROFILES`: the device is a controller, so an application that also suggested a
@@ -122,7 +127,7 @@ the same simulated controller (`src/input.c`), with no change to the simulator.
 * **The values are the controller's.** `pinch_ext/value` and `aim_activate_ext/value` are the trigger,
   `grasp_ext/value` the grip; each `ready_ext` is always true -- a controller's hand is always in a pose to
   pinch -- so a value is never reported while its ready is false, as the extension requires.
-* **The pinch and poke poses are a fixed offset from the grip** (`hand_pinch_poke`, src/hand.c), taken
+* **The pinch and poke poses are a fixed offset from the grip** (`hand_pinch_poke`, runtime/hand.c), taken
   from the open hand of "Hand tracking": the poke on the index tip's surface (the tip pushed its radius
   along its -Z), oriented as the tip -- +Z back along the bone, +Y the back of the finger; the pinch
   midway between the index and thumb tips, its -Z pointing away from the midpoint of the two proximal
@@ -143,7 +148,7 @@ and session state, and the keys.
 
 * Drag in the view: turn the selected device. W A S D: move it, Q E down and up, Shift slower.
 * Tab: the next device. R (or "Put everything back"): every device back where it started -- the same poses
-  the runtime answers before the simulator has written any (`oxs_tracking_home`, src/xrmath.h).
+  the runtime answers before the simulator has written any (`oxs_tracking_home`, common/xrmath.h).
 * Space trigger, G grip, Z primary button (A/X), X secondary (B/Y), M menu, arrow keys the thumbstick, C
   the thumbstick's click: on the selected hand, or the right hand while the headset is selected.
 
@@ -153,19 +158,47 @@ everything. Shift is read from each key's own event: pressing it while W is alre
 at the next key, not at once.
 
 The hands go where the head goes: each is kept relative to the body -- the head's position, turned by
-its yaw alone -- so walking carries them along and looking down does not (`Rig`, src/sim/rig.hpp).
+its yaw alone -- so walking carries them along and looking down does not (`Rig`, sim/rig.hpp).
 
-Holding a key needs the key's RELEASE, which the display library did not deliver: a key-up callback is
-added to it (`on_key_release`), which no other application sees unless it asks.
+Keys are GLFW's key codes, which are positions: W is where W is on a US keyboard, whatever the layout says
+it is -- what a game's WASD means too.
 
-Started from the menu with no session, the window is the one setting: "Use the simulated headset", which
+Started by itself with no session, the window is the one setting: "Use the simulated headset", which
 writes `device =` as `--use`/`--unuse` do.
+
+## The window's toolkit (0.7.0)
+
+GLFW makes the window (Wayland, X11, Windows) and its OpenGL 1.1 context; Clay lays the frame out; the
+frame is drawn in software into one buffer (`sim/canvas.hpp`) and shown as one texture. Text is
+stb_truetype over the system's own fonts: fontconfig's sans-serif, bold and monospace on Linux, Segoe UI,
+Segoe UI Semibold and Consolas on Windows (`sim/os.hpp`) -- the only platform code in the window.
+
+* **In software** because the window is rounded rectangles, some text and two images: the same pixels with
+  a GPU, without one, under a remote desktop, headless. `--screenshot`, the headless test's `window.png`
+  and the control socket's `shot` are that buffer, not a capture.
+* **Tokens, not values** (`sim/ui.hpp`): one dark theme, six type roles, a spacing scale. The app chooses
+  roles, never a colour or a size.
+* **Sizes are logical**: laid out at the window's size over its content scale, drawn at the framebuffer's.
+* **Layout faults** are what the headless test counts: Clay's own errors, and any element outside its parent
+  on an axis the parent does not clip -- a word too long for its card, a row wider than the panel.
+* **Three threads in headset mode**: the window's does everything; the link's only waits on the wake
+  channel and wakes it; the control socket's hands each command to it and waits for the answer.
+* **The system's decorations**: GLFW's, through libdecor or xdg-decoration on Wayland and the native frame
+  on Windows. No title bar of its own.
+
+## Platforms (0.7.0)
+
+Linux (x86-64; Vulkan, OpenGL through EGL or GLX, OpenGL ES through EGL), and Windows (x86-64) being
+added: D3D11, then OpenGL through WGL, Vulkan, D3D12. Everything the runtime asks of the system is `runtime/plat.h`
+(`plat_posix.c`, `plat_win32.c`); the window's, `sim/os.hpp`, `sim/link.cpp` and `sim/control.cpp`. Windows
+is built from Linux with Visual Studio's build tools under Wine (`CMakePresets.json`).
 
 ## The control socket (0.6.0)
 
-A headset-mode simulator also listens on an abstract Unix socket, `\0openxr-sim/<uid>/<16 hex>`, for a
-program to drive it: one command a line, one JSON object back, always with `"ok"` (`src/sim/control.hpp`,
-`src/sim/commands.cpp`). Commands run on the window's own loop, between frames.
+A headset-mode simulator also listens on a Unix socket for a program to drive it -- on Linux an abstract
+one, `\0openxr-sim/<uid>/<16 hex>`; on Windows a file, `%LOCALAPPDATA%\openxr-sim\<16 hex>.sock`
+(`sim/control.hpp` says why each) -- one command a line, one JSON object back, always with `"ok"`
+(`sim/commands.cpp`). Commands run on the window's thread, between frames.
 
 | command | answers |
 |---|---|
@@ -182,9 +215,9 @@ PART is `headset`, `left` or `right`. A connection from another user is closed u
 
 ## The MCP server (0.6.0)
 
-`openxr-sim-mcp` is a Model Context Protocol server over stdio (`src/mcp/main.cpp`): an agent registers
+`openxr-sim-mcp` is a Model Context Protocol server over stdio (`mcp/main.cpp`): an agent registers
 it (`claude mcp add openxr-sim -- openxr-sim-mcp`) and gets the simulators as tools. It finds them in
-`/proc/net/unix` and connects per call. Tools: `list_simulators`, `launch` (an application started with
+`/proc/net/unix` and connects per call. (Linux only so far.) Tools: `list_simulators`, `launch` (an application started with
 `OPENXR_SIM_DEVICE=sim`, detached, its output in `~/.local/state/openxr-sim-mcp/`, waiting for its simulator
 to appear), `status`, `screenshot` (an image), `get_poses`, `set_pose`, `move`, `turn`, `press` (hold,
 150 ms, release), `hold`, `release`, `reset`. Each takes `simulator` (an id or its start) when more than one

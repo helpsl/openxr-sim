@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The openxr-sim authors
 //
-// openxr-sim -- the simulated headset's window (DESIGN.md). The LOS OpenXR runtime starts it with
-// --headset when an application creates a session; from the menu it shows the one setting there is.
+// openxr-sim -- the simulated headset's window (docs/DESIGN.md). The runtime starts it with --headset when
+// an application creates a session; started by itself it shows the one setting there is.
 
 #include "app.hpp"
+#include "sim_protocol.h"
 
-#include "los/parse.hpp"
-
+#include <cstdio>
 #include <cstdlib>
 #include <print>
 #include <string>
 
+namespace {
+
+bool parse_size(const std::string& s, int& w, int& h) {
+    char x = 0;
+    return std::sscanf(s.c_str(), "%d%c%d", &w, &x, &h) == 3 && x == 'x' && w >= 64 && h >= 64 && w <= 16384 && h <= 16384;
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
-    std::string app_name, screenshot;
+    std::string app_name, screenshot, link;
     bool headset = false, check = false;
     int w = 1280, h = 760;
     for (int i = 1; i < argc; i++) {
@@ -22,15 +31,15 @@ int main(int argc, char** argv) {
             std::println(
                 "openxr-sim -- the simulated OpenXR headset\n\n"
                 "usage: openxr-sim [--use | --unuse]\n\n"
-                "  --use             OpenXR applications get the simulated headset (device = sim in\n"
-                "                    ~/.config/los/openxr); OPENXR_SIM_DEVICE overrides it per process\n"
+                "  --use             OpenXR applications get the simulated headset (device = sim in the\n"
+                "                    configuration file); OPENXR_SIM_DEVICE overrides it per process\n"
                 "  --unuse           they find no headset connected again (device = null)\n"
-                "  --screenshot OUT  render one frame to a PNG and exit; no compositor needed\n"
+                "  --screenshot OUT  render one frame to a PNG and exit; no display needed\n"
                 "  --size WxH        the size --screenshot and --layout-check use (default 1280x760)\n"
                 "  --layout-check    lay one frame out headless and report its layout faults\n\n"
-                "The runtime starts it with --headset --app NAME and the shared memory and socket on\n"
-                "descriptors 3 and 4. OPENXR_SIM_HEADLESS=DIR makes that a test: no window, a scripted\n"
-                "move, and the last frame and this window written to DIR.");
+                "The runtime starts it with --headset --app NAME and the shared memory and its wake channel\n"
+                "(descriptors 3 and 4; on Windows --link SHM,PIPE). OPENXR_SIM_HEADLESS=DIR makes that a test:\n"
+                "no window, a scripted move, and the last frame and this window written to DIR.");
             return 0;
         }
         if (a == "--use" || a == "--unuse") {
@@ -44,13 +53,11 @@ int main(int argc, char** argv) {
         }
         if (a == "--headset") { headset = true; continue; }
         if (a == "--app" && i + 1 < argc) { app_name = argv[++i]; continue; }
+        if (a == "--link" && i + 1 < argc) { link = argv[++i]; continue; }
         if (a == "--screenshot" && i + 1 < argc) { screenshot = argv[++i]; continue; }
         if (a == "--layout-check") { check = true; continue; }
         if (a == "--size" && i + 1 < argc) {
-            const auto v = los::parse_tuple<int, 2>(argv[++i], 'x');
-            if (!v) { std::println(stderr, "openxr-sim: --size wants WxH"); return 2; }
-            w = (*v)[0];
-            h = (*v)[1];
+            if (!parse_size(argv[++i], w, h)) { std::println(stderr, "openxr-sim: --size wants WxH"); return 2; }
             continue;
         }
         std::println(stderr, "openxr-sim: unknown option '{}'", a);
@@ -60,7 +67,7 @@ int main(int argc, char** argv) {
     oxs::App app(app_name);
     if (headset) {
         std::string error;
-        if (!app.attach(OXS_SHM_FD, OXS_SOCKET_FD, &error)) {
+        if (!app.attach(link, &error)) {
             std::println(stderr, "openxr-sim: {}", error);
             return 1;
         }

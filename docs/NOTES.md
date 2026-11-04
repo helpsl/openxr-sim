@@ -2,7 +2,7 @@
 
 ## What it is (0.1.0, 2026-10-01)
 
-LOS's OpenXR runtime. An OpenXR application asks the Khronos loader (openxr-sdk) for the active
+An OpenXR runtime (LOS's, until it became a repository of its own in 0.7.0). An OpenXR application asks the Khronos loader (openxr-sdk) for the active
 runtime; with none, or a manifest whose `library_path` is empty or wrong, `xrCreateInstance` fails
 (measured: an empty `library_path` → "failed to find negotiate function", "failed to load a runtime")
 and most applications treat that as fatal. With this runtime the instance is created normally and
@@ -10,21 +10,21 @@ and most applications treat that as fatal. With this runtime the instance is cre
 not connected" -- which applications are written to handle: they say "connect your headset" and
 keep polling.
 
-Installed: `/usr/lib/x86_64-linux-gnu/openxr-sim/libopenxr_sim.so` (a module, off the library path),
-`/usr/share/openxr/1/openxr_sim.json`, and `/etc/xdg/openxr/1/active_runtime.json` (a conffile)
-making it the system default. A user's `~/.config/openxr/1/active_runtime.json` -- SteamVR writes one
+Installed: `<libdir>/openxr-sim/libopenxr_sim.so` (a module, off the library path),
+`/usr/share/openxr/1/openxr_sim.json`, and -- with `-DOPENXR_SIM_INSTALL_ACTIVE_RUNTIME=ON`, as LOS builds
+it -- `/etc/xdg/openxr/1/active_runtime.json` making it the system default. A user's `~/.config/openxr/1/active_runtime.json` -- SteamVR writes one
 -- still wins, by the loader's search order; `XR_RUNTIME_JSON` wins over both.
 
 ## Shape: a runtime in front, a device behind
 
-`src/runtime.c` is OpenXR's instance level: negotiation (`xrNegotiateLoaderRuntimeInterface`, the only
+`runtime/runtime.c` is OpenXR's instance level: negotiation (`xrNegotiateLoaderRuntimeInterface`, the only
 export), instances, extensions, systems, graphics requirements, paths, debug utils, timespec conversion,
-the string functions, and the dispatch (`lookup`). Since 0.2.0 the rest is real too: `src/session.c`
-(the session's states, frame timing, spaces, views), `src/swapchain.c` with `swapchain_vk.c` and
-`swapchain_gl.c` (images in the application's own API, copied back at release), `src/input.c` (action
-sets, actions, bindings, haptics). `src/device.h` is what a headset answers; `OPENXR_SIM_DEVICE`, else
-`device =` in `~/.config/los/openxr`, chooses between `src/device_null.c` (the default) and
-`src/device_sim.c`, the simulated headset -- see DESIGN.md. `OPENXR_SIM_LOG=1` says what the runtime is
+the string functions, and the dispatch (`lookup`). Since 0.2.0 the rest is real too: `runtime/session.c`
+(the session's states, frame timing, spaces, views), `runtime/swapchain.c` with `swapchain_vk.c` and
+`swapchain_gl.c` (images in the application's own API, copied back at release), `runtime/input.c` (action
+sets, actions, bindings, haptics). `common/device.h` is what a headset answers; `OPENXR_SIM_DEVICE`, else
+`device =` in the configuration file (DESIGN.md, "Choosing the device"), chooses between `runtime/device_null.c` (the default) and
+`runtime/device_sim.c`, the simulated headset -- see DESIGN.md. `OPENXR_SIM_LOG=1` says what the runtime is
 doing on stderr.
 
 * **Every function exists.** The loader fills its dispatch table from `xrGetInstanceProcAddr` at
@@ -45,7 +45,7 @@ doing on stderr.
 
 Verified: `tests/probe.c` through the real loader (run by the recipe at build time, and shipped as
 `/usr/libexec/openxr-sim/openxr-sim-probe`): instance with vulkan_enable2 + opengl_enable +
-debug_utils, runtime named LOS, headset FORM_FACTOR_UNAVAILABLE, no events, paths, an action set
+debug_utils, runtime named openxr-sim (LOS until 0.7.0), headset FORM_FACTOR_UNAVAILABLE, no events, paths, an action set
 before any system, a system call without a system answered rather than crashing.
 
 ## The simulated headset (0.2.0, 2026-10-21)
@@ -54,7 +54,7 @@ The owner's second half of the 2026-10-01 request: an application's two eyes in 
 both controllers moved with the mouse and keys. The design, the window and the keys are DESIGN.md; what
 follows is what is not obvious from it.
 
-* **The simulator is the application's child** (`sim_open`, src/device_sim.c): posix_spawn at
+* **The simulator is the application's child** (`sim_open`, runtime/device_sim.c): posix_spawn at
   `xrCreateSession`, the memory file on descriptor 3 and the socket on 4 (both first lifted to 10 or
   above, so the dup2s cannot overwrite each other), its own session id, the default signal mask and
   dispositions, and `LD_PRELOAD`/`LD_LIBRARY_PATH` left out of its environment -- an application's
@@ -65,10 +65,10 @@ follows is what is not obvious from it.
   closing ends the other: the window closed is `STOPPING` for the application (`session_poll`), the
   session destroyed closes the window (`App::on_frame_ready`). The runtime gives the child half a second
   to go (`reap`) and otherwise leaves it to the application's own exit, rather than blocking a frame.
-* **Frames are three slots** in the memory file (src/sim_protocol.h): the runtime writes one that is
+* **Frames are three slots** in the memory file (common/sim_protocol.h): the runtime writes one that is
   neither published nor being read, so neither side waits. The simulator converts straight out of the
   slot to what the window will show -- four samples a pixel, linear values to sRGB, GL's rows turned
-  over (`convert_eye`, src/sim/link.cpp) -- so a 2048-pixel eye is never copied whole a second time.
+  over (`convert_eye`, sim/link.cpp) -- so a 2048-pixel eye is never copied whole a second time.
 * **Wine**: wineopenxr passes the Windows application's Vulkan calls to the Linux loader in the same
   process, so the runtime runs inside the Wine process and the simulator is a child of it. Its extension
   list parsing (`parse_extensions("")`) gives no extensions, so the runtime answers empty lists for
@@ -80,10 +80,9 @@ follows is what is not obvious from it.
   Behind WGL, Wine's context is a host EGL or GLX one, current on the calling thread, with the host's
   texture names -- so the runtime now takes the Win32 binding as "the current context" and, for every
   binding but MNDX's EGL one, uses whichever of EGL and GLX has a context current (`current_gpa`,
-  src/swapchain_gl.c). A session that fails for want of a binding or a context now says why on stderr.
+  runtime/swapchain_gl.c). A session that fails for want of a binding or a context now says why on stderr.
   Tested by `sim_client --gl-win32` (an EGL context named only by an empty Win32 binding): 0.2.0 gives
   exactly the -38 seen; 0.2.1 runs it through. Not yet run inside Wine itself.
-* **Key releases** are new in los-display (`Window::on_key_release`, a no-op unless a window sets one).
 
 Verified (2026-10-21): `tests/sim-test.sh`, Vulkan on lavapipe and desktop GL on EGL surfaceless
 (llvmpipe), the latter also through a Win32 binding: FOCUSED, the Touch profile from the client's suggestions, the simulator's scripted head turn
@@ -195,10 +194,6 @@ draws and drive the headset and controllers. The protocol and tools are DESIGN.m
   `launch` sends the application's output to a log, never to ours, and double-forks it into its own
   session: it outlives the server, which a client restarts at will.
 * **`press` holds for 150 ms**, so a frame sees it: an application samples its actions once a frame.
-* **Unwatching inside its own callback.** A client that hangs up is unwatched from the callback serving
-  it, and los-display's loop called the callback in place -- erasing it would have destroyed the function
-  while it ran. The loop calls a copy now (`window_wayland.cpp`, the watched descriptors), and AppWindow
-  gained `unwatch_fd`.
 
 Verified (2026-10-29) in a headless compositor (its own runtime dir, no modules) with the dev build, all
 of it through `openxr-sim-mcp` on stdio: `launch` started `openxr-sim-client` and returned its
@@ -210,3 +205,37 @@ refused; the simulator was gone from `list_simulators` once the session ended; a
 and its simulator outlived the server. `tests/sim-test.sh` still passes (headless mode does not open the
 socket).
 
+
+## Its own repository, and the window rebuilt (0.7.0, 2026-11-04)
+
+The owner: "split out our openxr simulator in to its own repo, seperate it from LOS code, and give it
+windows support", with GLFW and Clay for the window. LOS's names went: `los-openxr*` is `openxr-sim*`,
+the library `libopenxr_sim`, the identifiers `oxs_`, the variables `OPENXR_SIM_*`, the configuration
+`~/.config/openxr-sim/config` (the old variable and file read after the new ones until 2027-05-01). The
+shared memory's version went to 3, so a simulator from before the split refuses this runtime's region and
+says so, rather than misreading it.
+
+* **The runtime's system calls are one file per platform** (`runtime/plat.h`): the child's start, its
+  shared memory and wake channel, symbol lookup, the clock, the configuration's path. pthreads are
+  `common/threads.h` (SRW locks and condition variables on Windows) and the shared memory's atomics have an
+  MSVC path (`common/sim_protocol.h`) -- x86-64 only, where TSO makes acquire and release compiler barriers.
+* **The window was los-ui on los-display**; it is GLFW, Clay and a software canvas now (DESIGN.md, "The
+  window's toolkit"). The panel's look is the old one's -- cards, a segmented control, push buttons, badges
+  -- in one dark theme of its own. The title bar is the system's.
+* **No glBegin.** Mesa 26.2's llvmpipe on Wayland freed a buffer of the window's surface and read it again
+  at the next swap after any `glBegin`/`glEnd` -- the window died on its first frame. A twenty-line GLFW
+  program showed it with nothing of ours in it; the textured quad is drawn from vertex arrays, as old (1.1).
+* **A variable font has no bold for stb_truetype**: it reads only the default instance. Noto Sans here is
+  one file whose Bold is a named instance (fontconfig's index, high 16 bits), so that face is emboldened
+  by smearing each glyph a twentieth of its size to the right (`Fonts::embolden`). Segoe UI Semibold is a
+  file of its own.
+* **Resizing draws in the loop, not the callback** on Linux: GLFW calls it from inside libdecor's
+  configure. On Windows it draws at once, because the loop does not run while the window is being dragged.
+
+Verified (2026-11-04), on Linux: the probe through the real loader; `tests/sim-test.sh`, 173 checks, all
+seven runs (Vulkan, GL, GL through a Win32 binding, layers in both APIs, hand tracking, hand interaction),
+every window drawn with no layout faults; the fault check itself fires on a window too small for its text
+(`--layout-check --size 160x300`: 2 faults). In a nested headless compositor, the real window over GLFW
+(Wayland, llvmpipe): the test client's session reached FOCUSED, `turn headset 30 0` and `hold right
+trigger a` over the control socket reached the client's own checks, and the framebuffer read back after a
+swap was the panel and both eyes as `--screenshot` draws them.

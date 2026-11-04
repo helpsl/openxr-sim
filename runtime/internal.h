@@ -32,7 +32,7 @@ typedef unsigned int EGLenum;
 #include "xrmath.h"
 
 #define RUNTIME_NAME "openxr-sim"
-#define RUNTIME_VERSION XR_MAKE_VERSION(0, 4, 0)
+#define RUNTIME_VERSION XR_MAKE_VERSION(0, 7, 0)
 
 void say(const char *fmt, ...) OXS_PRINTF(1, 2);
 const struct oxs_device *device(void);

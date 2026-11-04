@@ -2,7 +2,7 @@
 // Copyright 2026 The openxr-sim authors
 //
 // openxr-sim -- an OpenXR runtime whose headset is a window (LOS's runtime 0.1.0 2026-10-01; the simulated
-// headset 0.2.0, 2026-10-21; its own repository, for Linux and Windows, 0.4.0 2026-11-04).
+// headset 0.2.0, 2026-10-21; its own repository, for Linux and Windows, 0.7.0 2026-11-04).
 //
 // WHY. An OpenXR application asks the loader for the active runtime; with none, or with a manifest
 // whose library is missing, xrCreateInstance fails with XR_ERROR_RUNTIME_UNAVAILABLE and most

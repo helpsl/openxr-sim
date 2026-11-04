@@ -8,9 +8,10 @@
 
 #include "app.hpp"
 
-#include "los/parse.hpp"
+#include "canvas.hpp"
 
-#include <cairo.h>
+#include <charconv>
+#include <cstdlib>
 
 #include <algorithm>
 #include <cmath>
@@ -73,9 +74,17 @@ std::string controls_json(uint32_t held) {
 }
 
 double number(const std::string& w, bool* ok) {
-    const auto v = los::parse<double>(w);
-    if (!v || !std::isfinite(*v)) { *ok = false; return 0; }
-    return *v;
+    char* end = nullptr;
+    const double v = std::strtod(w.c_str(), &end);
+    if (w.empty() || end != w.c_str() + w.size() || !std::isfinite(v)) { *ok = false; return 0; }
+    return v;
+}
+
+std::optional<int> integer(const std::string& w) {
+    int v = 0;
+    const auto [p, ec] = std::from_chars(w.data(), w.data() + w.size(), v);
+    if (ec != std::errc() || p != w.data() + w.size()) return std::nullopt;
+    return v;
 }
 
 // The eyes side by side, each at most `max` pixels on its longer side, as a PNG.
@@ -91,33 +100,17 @@ std::string eyes_png(const EyePixels eyes[2], int max, int* out_w, int* out_h) {
     *out_w = w[0] + w[1];
     *out_h = std::max(h[0], h[1]);
     if (*out_w <= 0 || *out_h <= 0) return {};
-    cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, *out_w, *out_h);
-    cairo_t* cr = cairo_create(out);
-    cairo_set_source_rgb(cr, 0, 0, 0);
-    cairo_paint(cr);
-    double x = 0;
+    Canvas out;
+    out.resize(*out_w, *out_h);
+    out.clear({ 0, 0, 0, 255 });
+    float x = 0;
     for (int e = 0; e < 2; e++) {
         if (w[e] == 0) continue;
-        cairo_surface_t* src = cairo_image_surface_create_for_data(const_cast<uint8_t*>(eyes[e].argb.data()), CAIRO_FORMAT_ARGB32,
-                                                                   eyes[e].width, eyes[e].height, eyes[e].width * 4);
-        cairo_save(cr);
-        cairo_translate(cr, x, 0);
-        cairo_scale(cr, scale[e], scale[e]);
-        cairo_set_source_surface(cr, src, 0, 0);
-        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
-        cairo_paint(cr);
-        cairo_restore(cr);
-        cairo_surface_destroy(src);
-        x += w[e];
+        out.image({ x, 0, static_cast<float>(w[e]), static_cast<float>(h[e]) },
+                  { eyes[e].argb.data(), eyes[e].width, eyes[e].height, eyes[e].width * 4 });
+        x += static_cast<float>(w[e]);
     }
-    cairo_destroy(cr);
-    std::string png;
-    cairo_surface_write_to_png_stream(out, [](void* p, const unsigned char* d, unsigned int n) {
-        static_cast<std::string*>(p)->append(reinterpret_cast<const char*>(d), n);
-        return CAIRO_STATUS_SUCCESS;
-    }, &png);
-    cairo_surface_destroy(out);
-    return png;
+    return Canvas::encode_png({ out.data(), out.width(), out.height(), out.width() * 4 });
 }
 
 std::string base64(const std::string& in) {
@@ -214,7 +207,7 @@ std::string App::command(const std::string& line) {
     if (verb == "shot") {
         int max = 512;
         if (w.size() > 1) {
-            const auto v = los::parse<int>(w[1]);
+            const auto v = integer(w[1]);
             if (!v || *v < 16 || *v > 2048) return fail("shot [MAX]: each eye at most MAX pixels, 16 to 2048");
             max = *v;
         }
