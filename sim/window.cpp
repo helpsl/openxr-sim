@@ -2,6 +2,8 @@
 // Copyright 2026 The openxr-sim authors
 #include "window.hpp"
 
+#include "os.hpp"
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -35,6 +37,13 @@ void on_glfw_error(int code, const char* what) { std::fprintf(stderr, "openxr-si
 bool glfw_up() {
     static const bool ok = [] {
         glfwSetErrorCallback(on_glfw_error);
+        // THE DESKTOP'S OWN TITLE BAR WHEN IT OFFERS ONE. GLFW on Wayland draws its frame with libdecor
+        // whenever it can load it, and libdecor never asks the compositor to: it takes the compositor's
+        // default, which is "draw your own" on LOS (whose compositor draws a frame only for a window that
+        // asks) -- so the window wore libdecor's bar instead of the desktop's. Without libdecor GLFW asks
+        // for a server-side frame through xdg-decoration. Only where it is offered: GNOME's compositor
+        // offers none, and libdecor's bar is the right one there.
+        if (compositor_draws_frames()) glfwInitHint(GLFW_WAYLAND_LIBDECOR, GLFW_WAYLAND_DISABLE_LIBDECOR);
         return glfwInit() == GLFW_TRUE;
     }();
     return ok;

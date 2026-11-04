@@ -3,8 +3,8 @@
 #pragma once
 
 // WHAT THE SIMULATOR ASKS OF THE OPERATING SYSTEM besides its window (GLFW's), its link (sim/link.cpp) and
-// its control socket (sim/control.cpp): where the fonts are and where the configuration lives.
-// os_posix.cpp and os_win32.cpp.
+// its control socket (sim/control.cpp): where the fonts are, where the configuration lives, what the desktop
+// looks like, and who draws the window's frame. os_posix.cpp and os_win32.cpp.
 
 #include "font.hpp"
 
@@ -27,5 +27,26 @@ std::string font_search_description();
 std::string config_path(int which);
 // Makes the directories `path` is in. False when they could not be.
 bool make_parent_dirs(const std::string& path);
+
+// THE DESKTOP'S APPEARANCE: light or dark, and the person's accent colour, so the window looks like the
+// desktop it is on (sim/ui.cpp, set_theme). Asked of the desktop, never of any one desktop's own files:
+//   Linux    the XDG desktop portal's Settings, org.freedesktop.appearance color-scheme and accent-color,
+//            which GNOME and KDE answer (LOS: the scheme; its backend has no accent-color yet) --
+//            os_posix.cpp, ask_portal. A desktop with no portal
+//            answers nothing, and the window keeps its own dark theme.
+//   Windows  AppsUseLightTheme and the DWM colourisation colour.
+// OPENXR_SIM_THEME=dark or light overrides the scheme. `ask_desktop` false: only that -- a --screenshot or a
+// headless test looks the same on every machine, and in a build with no session bus.
+struct Appearance {
+    enum class Scheme { Unknown, Dark, Light } scheme = Scheme::Unknown;
+    bool has_accent = false;
+    float accent_r = 0, accent_g = 0, accent_b = 0;   // sRGB, 0..1
+};
+Appearance desktop_appearance(bool ask_desktop);
+
+// WHO DRAWS THE FRAME (sim/window.cpp): true when the compositor offers to draw the window's title bar and
+// borders itself (Wayland's xdg-decoration), so GLFW should ask it to instead of drawing one with libdecor.
+// False on Windows, on X11 and on a compositor that offers nothing.
+bool compositor_draws_frames();
 
 }  // namespace oxs

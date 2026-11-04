@@ -23,7 +23,7 @@ It began as LOS's runtime (`apps/los-openxr`) and is its own project since 0.7.0
 ## Building
 
 Linux, with CMake 3.21+, a C11 and C++23 compiler, and the development files of: the OpenXR SDK
-(`openxr`), Vulkan headers, GLFW 3.4+, fontconfig, jsoncpp (for the MCP server), EGL (for the tests).
+(`openxr`), Vulkan headers, GLFW 3.4+, fontconfig, libdbus-1 and wayland-client (the desktop's look and frame), jsoncpp (for the MCP server), EGL (for the tests).
 
     cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
     ninja -C build

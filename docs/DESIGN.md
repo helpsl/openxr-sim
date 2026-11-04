@@ -176,15 +176,24 @@ Segoe UI Semibold and Consolas on Windows (`sim/os.hpp`) -- the only platform co
 * **In software** because the window is rounded rectangles, some text and two images: the same pixels with
   a GPU, without one, under a remote desktop, headless. `--screenshot`, the headless test's `window.png`
   and the control socket's `shot` are that buffer, not a capture.
-* **Tokens, not values** (`sim/ui.hpp`): one dark theme, six type roles, a spacing scale. The app chooses
+* **Tokens, not values** (`sim/ui.hpp`): a theme by role, six type roles, a spacing scale. The app chooses
   roles, never a colour or a size.
+* **The desktop's look** (`sim/os.hpp`, `desktop_appearance`; `sim/ui.cpp`, `set_theme`): light or dark and
+  the accent are the desktop's, asked of it in the standard way -- on Linux the XDG portal's
+  `org.freedesktop.appearance` `color-scheme` and `accent-color`, which GNOME and KDE answer (LOS the
+  scheme only, so far: NOTES.md, 0.7.1); on Windows
+  the personalisation settings. The neutrals are LOS's palette's, copied as numbers (nothing of LOS's is
+  linked), so on LOS the window and the compositor's frame round it are one surface. No answer: dark, and
+  LOS's default accent. `--screenshot`, `--layout-check` and the headless test do not ask: the same picture
+  on every machine; `OPENXR_SIM_THEME=dark|light` picks for them, and overrides the desktop.
 * **Sizes are logical**: laid out at the window's size over its content scale, drawn at the framebuffer's.
 * **Layout faults** are what the headless test counts: Clay's own errors, and any element outside its parent
   on an axis the parent does not clip -- a word too long for its card, a row wider than the panel.
 * **Three threads in headset mode**: the window's does everything; the link's only waits on the wake
   channel and wakes it; the control socket's hands each command to it and waits for the answer.
-* **The system's decorations**: GLFW's, through libdecor or xdg-decoration on Wayland and the native frame
-  on Windows. No title bar of its own.
+* **The desktop's decorations**: no title bar of its own. On Wayland the compositor's frame wherever it
+  offers one (xdg-decoration), libdecor's where it does not (GNOME); the native frame on Windows. See
+  NOTES.md, 0.7.1, for why GLFW has to be told.
 
 ## Platforms (0.7.0)
 

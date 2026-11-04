@@ -23,6 +23,7 @@
 #include "font.hpp"
 
 #include "clay.h"
+#include "os.hpp"
 
 #include <cstdint>
 #include <deque>
@@ -35,10 +36,18 @@ namespace oxs::ui {
 
 // ---- tokens ------------------------------------------------------------------------------------------
 
+// THE COLOURS, by role. The desktop's scheme and accent decide them (set_theme, from sim/os.hpp's
+// desktop_appearance); the neutrals are LOS's palette's, so on LOS the window and the frame the compositor
+// draws round it are one surface -- and elsewhere a quiet grey that suits any desktop.
 struct Theme {
-    Rgba window, card, well, line, text, dim, faint, accent, success, warning, control, control_hover, on_strong;
+    bool dark = true;
+    Rgba window, card, well, line, text, dim, faint, accent, success, warning, control, control_hover;
 };
 const Theme& theme();
+void set_theme(const Appearance& desktop);
+// Text and marks on a filled `background` (an accent, a status colour): near-black on a light one, white
+// on a dark one.
+Rgba on(Rgba background);
 
 enum class Role { Title, Heading, Body, Control, Secondary, Caption };
 struct Type { Face face; uint16_t size; };

@@ -32,7 +32,11 @@ if(WIN32)
 else()
     target_sources(openxr-sim PRIVATE os_posix.cpp)
     pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
-    target_link_libraries(openxr-sim PRIVATE PkgConfig::FONTCONFIG)
+    # The desktop's appearance from its portal (D-Bus), and whether its compositor draws the frame
+    # (wayland-client, which GLFW loads anyway): sim/os.hpp.
+    pkg_check_modules(DBUS REQUIRED IMPORTED_TARGET dbus-1)
+    pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+    target_link_libraries(openxr-sim PRIVATE PkgConfig::FONTCONFIG PkgConfig::DBUS PkgConfig::WAYLAND_CLIENT)
 endif()
 target_include_directories(openxr-sim PRIVATE . "${PROJECT_SOURCE_DIR}/common" "${PROJECT_SOURCE_DIR}/third_party/clay"
     "${PROJECT_SOURCE_DIR}/third_party/stb")

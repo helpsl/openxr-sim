@@ -49,16 +49,69 @@ bool inside(const RectF& r, float x, float y) { return x >= r.x && y >= r.y && x
 
 // ---- tokens ------------------------------------------------------------------------------------------
 
-// ONE THEME, dark: the window shows other programs' pictures, and a dark frame round them is what keeps
-// their colours honest.
-const Theme& theme() {
-    static const Theme t{
-        .window = hex(0x1d1e22), .card = hex(0x27292e), .well = hex(0x121316), .line = hex(0x34363c),
-        .text = hex(0xe8e9ec), .dim = hex(0xa2a5ad), .faint = hex(0x6f727a),
-        .accent = hex(0x5b8def), .success = hex(0x3fb27f), .warning = hex(0xd9a03f),
-        .control = hex(0x34363c), .control_hover = hex(0x3f4249), .on_strong = hex(0x0f1012),
-    };
+// THE PALETTE, LOS's (los-common's los::palette_from), as numbers: this project links nothing of LOS's.
+//   window   the surface                 card     one surface step (6%) toward white (dark) or black (light)
+//   well     a sunken field              control  a step from the card, and its hover a wash over that
+//   line     the separator               dim      secondary text; faint a step further back
+// Without a desktop's answer: dark, and LOS's default accent (terracotta). Dark is the better frame for
+// what the window shows -- other programs' pictures -- but the person's choice of light is theirs.
+namespace {
+
+Theme g_theme;
+bool g_theme_set = false;
+
+constexpr float kStep = 0.06f;
+
+Rgba mix(Rgba a, Rgba b, float t) {   // a moved t of the way to b
+    return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 255 };
+}
+
+Theme make_theme(const Appearance& d) {
+    const bool dark = d.scheme != Appearance::Scheme::Light;
+    const Rgba toward = dark ? hex(0xffffff) : hex(0x000000);
+    Theme t;
+    t.dark = dark;
+    if (dark) {
+        t.window = hex(0x202226);
+        t.text = hex(0xe8eaed);
+        t.dim = hex(0x969aa0);
+        t.well = hex(0x141518);
+        t.line = mix(t.window, hex(0xffffff), 24 / 255.0f);
+        t.success = hex(0x5cb873);   // LOS's { 0.36, 0.72, 0.45 }
+        t.warning = hex(0xdba842);   // { 0.86, 0.66, 0.26 }
+    } else {
+        t.window = hex(0xfafafc);
+        t.text = hex(0x1c1e22);
+        t.dim = hex(0x71717a);
+        t.well = hex(0xffffff);
+        t.line = mix(t.window, hex(0x000000), 28 / 255.0f);
+        t.success = hex(0x218540);   // { 0.13, 0.52, 0.25 }
+        t.warning = hex(0x9e6b0a);   // { 0.62, 0.42, 0.04 }
+    }
+    t.card = mix(t.window, toward, kStep);
+    t.control = mix(t.card, toward, kStep);
+    t.control_hover = mix(t.control, toward, (dark ? 20 : 18) / 255.0f);
+    t.faint = mix(t.dim, t.window, 0.4f);
+    t.accent = d.has_accent ? Rgba{ std::round(d.accent_r * 255), std::round(d.accent_g * 255), std::round(d.accent_b * 255), 255 } : hex(0xb57763);
     return t;
+}
+
+}  // namespace
+
+const Theme& theme() {
+    if (!g_theme_set) set_theme({});
+    return g_theme;
+}
+
+void set_theme(const Appearance& desktop) {
+    g_theme = make_theme(desktop);
+    g_theme_set = true;
+}
+
+// LOS's contrast_text: Rec. 709 luma over 0.6 is a light background.
+Rgba on(Rgba bg) {
+    const float luma = (0.2126f * bg.r + 0.7152f * bg.g + 0.0722f * bg.b) / 255;
+    return luma > 0.6f ? Rgba{ 20, 20, 26, 255 } : Rgba{ 255, 255, 255, 255 };
 }
 
 Type type(Role r) {
@@ -319,14 +372,14 @@ void control_box(const char* tag, uint32_t index, std::string_view label, Rgba b
 void button(const char* tag, uint32_t index, std::string_view label, ButtonKind kind) {
     const Theme& t = theme();
     const bool hov = Ui::current().hovered(tag, index);
-    if (kind == ButtonKind::Primary) control_box(tag, index, label, hov ? with_alpha(t.accent, 225) : t.accent, t.on_strong);
+    if (kind == ButtonKind::Primary) control_box(tag, index, label, hov ? with_alpha(t.accent, 225) : t.accent, on(t.accent));
     else control_box(tag, index, label, hov ? t.control_hover : t.control, t.text);
 }
 
 void push_button(const char* tag, uint32_t index, std::string_view label, bool on) {
     const Theme& t = theme();
     const bool hov = Ui::current().hovered(tag, index);
-    control_box(tag, index, label, on ? t.success : hov ? t.control_hover : t.control, on ? t.on_strong : t.text, Size::grow());
+    control_box(tag, index, label, on ? t.success : hov ? t.control_hover : t.control, on ? ui::on(t.success) : t.text, Size::grow());
 }
 
 void segmented(const char* tag, const std::vector<std::string>& labels, size_t selected) {
@@ -364,7 +417,7 @@ void toggle(const char* tag, uint32_t index, bool on) {
     Box b(track);
     Style knob;
     knob.w = knob.h = Size::fixed(16);
-    knob.background = on ? t.on_strong : t.dim;
+    knob.background = on ? ui::on(t.accent) : t.dim;
     knob.radius = 8;
     Box k(knob);
 }
@@ -379,7 +432,7 @@ void badge(std::string_view label, Tone tone, bool strong) {
     s.background = strong ? c : with_alpha(c, 45);
     s.radius = 9;
     Box b(s);
-    text(label, Role::Secondary, strong ? theme().on_strong : c);
+    text(label, Role::Secondary, strong ? on(c) : c);
 }
 
 }  // namespace oxs::ui

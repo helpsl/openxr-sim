@@ -5,7 +5,9 @@
 // an application creates a session; started by itself it shows the one setting there is.
 
 #include "app.hpp"
+#include "os.hpp"
 #include "sim_protocol.h"
+#include "ui.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -39,7 +41,10 @@ int main(int argc, char** argv) {
                 "  --layout-check    lay one frame out headless and report its layout faults\n\n"
                 "The runtime starts it with --headset --app NAME and the shared memory and its wake channel\n"
                 "(descriptors 3 and 4; on Windows --link SHM,PIPE). OPENXR_SIM_HEADLESS=DIR makes that a test:\n"
-                "no window, a scripted move, and the last frame and this window written to DIR.");
+                "no window, a scripted move, and the last frame and this window written to DIR.\n\n"
+                "The window follows the desktop's light or dark scheme and accent colour (the XDG portal's\n"
+                "org.freedesktop.appearance; on Windows the personalisation settings). OPENXR_SIM_THEME=dark\n"
+                "or light sets the scheme instead; --screenshot and --layout-check use only that (default dark).");
             return 0;
         }
         if (a == "--use" || a == "--unuse") {
@@ -64,6 +69,18 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // The desktop's look for a window someone sees; a picture or a test is the same everywhere.
+    const char* headless = headset ? std::getenv("OPENXR_SIM_HEADLESS") : nullptr;
+    const bool shown = !check && screenshot.empty() && (headless == nullptr || headless[0] == '\0');
+    const oxs::Appearance look = oxs::desktop_appearance(shown);
+    oxs::ui::set_theme(look);
+    if (const char* log = std::getenv("OPENXR_SIM_LOG"); log != nullptr && log[0] != '\0' && log[0] != '0') {
+        const char* scheme = look.scheme == oxs::Appearance::Scheme::Dark ? "dark" : look.scheme == oxs::Appearance::Scheme::Light ? "light" : "no preference";
+        const oxs::Rgba a = oxs::ui::theme().accent;
+        std::println(stderr, "openxr-sim: the desktop's scheme: {}; accent #{:02x}{:02x}{:02x}{}", scheme, static_cast<int>(a.r),
+                     static_cast<int>(a.g), static_cast<int>(a.b), look.has_accent ? "" : " (none given: our own)");
+    }
+
     oxs::App app(app_name);
     if (headset) {
         std::string error;
@@ -71,7 +88,7 @@ int main(int argc, char** argv) {
             std::println(stderr, "openxr-sim: {}", error);
             return 1;
         }
-        if (const char* dir = std::getenv("OPENXR_SIM_HEADLESS"); dir != nullptr && dir[0] != '\0') return app.headless(dir);
+        if (headless != nullptr && headless[0] != '\0') return app.headless(headless);
     }
     if (check) return app.layout_check(w, h);
     if (!screenshot.empty()) {

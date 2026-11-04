@@ -221,7 +221,7 @@ says so, rather than misreading it.
   MSVC path (`common/sim_protocol.h`) -- x86-64 only, where TSO makes acquire and release compiler barriers.
 * **The window was los-ui on los-display**; it is GLFW, Clay and a software canvas now (DESIGN.md, "The
   window's toolkit"). The panel's look is the old one's -- cards, a segmented control, push buttons, badges
-  -- in one dark theme of its own. The title bar is the system's.
+  -- in one dark theme of its own (0.7.1: the desktop's). The title bar is the system's.
 * **No glBegin.** Mesa 26.2's llvmpipe on Wayland freed a buffer of the window's surface and read it again
   at the next swap after any `glBegin`/`glEnd` -- the window died on its first frame. A twenty-line GLFW
   program showed it with nothing of ours in it; the textured quad is drawn from vertex arrays, as old (1.1).
@@ -239,3 +239,40 @@ every window drawn with no layout faults; the fault check itself fires on a wind
 (Wayland, llvmpipe): the test client's session reached FOCUSED, `turn headset 30 0` and `hold right
 trigger a` over the control socket reached the client's own checks, and the framebuffer read back after a
 swap was the panel and both eyes as `--screenshot` draws them.
+
+## The desktop's frame and colours (0.7.1, 2026-11-04)
+
+The owner, on 0.7.0's window wearing libdecor's bar on LOS: "doesn't the LOS-style bar come from the
+provided wayland window client decoration? we should use LOS palette colours ideally, but the package
+shouldn't link against any LOS code, could it grab them from xdg or something similar?"
+
+* **GLFW draws with libdecor whenever it can load it, and libdecor never asks the compositor for a frame**
+  (libdecor 0.2.5, `src/libdecor.c`: it records the compositor's first answer and only re-asserts server
+  side if that answer already was). LOS's compositor draws a frame only for a window that asks, so the
+  window was told to draw its own and got libdecor's bar. GLFW without libdecor asks for server side
+  through xdg-decoration itself. So `compositor_draws_frames()` (`sim/os_posix.cpp`) looks for
+  `zxdg_decoration_manager_v1` with one registry round trip before `glfwInit`, and only then is
+  `GLFW_WAYLAND_DISABLE_LIBDECOR` set: GNOME offers no manager and keeps libdecor's bar; KDE, sway and LOS
+  draw their own.
+* **The colours come from the XDG portal**, the cross-desktop answer (there is no Wayland protocol for
+  it): `org.freedesktop.portal.Settings.ReadOne("org.freedesktop.appearance", "color-scheme" |
+  "accent-color")`, falling back to `Read` on a portal too old for `ReadOne`. libdbus on a private
+  connection, with auto-start ON and 1 s: in the VM nothing had started the portal yet, and with auto-start
+  off (as los-shell asks, for a reason a shell has and an application does not) the window was told "no
+  preference" by a portal that, once started, said dark. Not reading LOS's own configuration is the point:
+  it would tie this project to that file's format.
+* **On LOS the accent does not arrive yet.** LOS's portal backend is xdg-desktop-portal-gtk 1.15.3, which
+  answers `color-scheme` and `contrast` and has no `accent-color` at all (`src/settings.c`); NotFound, and
+  the window uses its own (LOS's default, terracotta). GNOME's and KDE's backends answer it.
+* **The neutrals no standard publishes**: surface, card, field, text, separator are LOS's
+  (`los::palette_from`) as numbers in `sim/ui.cpp`. The text on a filled control is chosen by the fill's
+  luma (`ui::on`), since the accent is anyone's now.
+* **Asked once, at start**: a window open across a change of scheme keeps the one it started with.
+
+Verified (2026-11-04): `--screenshot` and `--layout-check` in both themes (0 faults); `tests/sim-test.sh`
+with `OPENXR_SIM_THEME=light`, all runs passing; under a nested headless los-compositor, `WAYLAND_DEBUG`
+showed `set_mode(2)` answered by `configure(2)` -- a server-side frame -- and with a stand-in portal on the
+private bus answering light and (0.47, 0.565, 0.533), the window logged (`OPENXR_SIM_LOG=1`) "scheme:
+light; accent #789088"; with no portal, "no preference" and its own accent. In the LOS VM, installed from
+the package: the compositor's title bar over the window (once los-compositor 0.54.11 fitted a window too
+big for the screen inside its frame, not under it), and "scheme: dark".
