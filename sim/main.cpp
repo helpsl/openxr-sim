@@ -5,6 +5,7 @@
 // an application creates a session; started by itself it shows the one setting there is.
 
 #include "app.hpp"
+#include "install.hpp"
 #include "os.hpp"
 #include "sim_protocol.h"
 #include "ui.hpp"
@@ -32,10 +33,17 @@ int main(int argc, char** argv) {
         if (a == "--help" || a == "-h") {
             std::println(
                 "openxr-sim -- the simulated OpenXR headset\n\n"
-                "usage: openxr-sim [--use | --unuse]\n\n"
+                "usage: openxr-sim [--use | --unuse | --register-runtime | --unregister-runtime]\n\n"
                 "  --use             OpenXR applications get the simulated headset (device = sim in the\n"
                 "                    configuration file); OPENXR_SIM_DEVICE overrides it per process\n"
                 "  --unuse           they find no headset connected again (device = null)\n"
+                "  --register-runtime\n"
+                "                    make this the active OpenXR runtime: on Windows install it (Program\n"
+                "                    Files, asking for an administrator) and register it for every user; on\n"
+                "                    Linux link it from ~/.config/openxr/1 for this user\n"
+                "  --unregister-runtime [--remove]\n"
+                "                    give back the runtime that was active before; --remove (Windows) also\n"
+                "                    removes the installed copy -- what Settings > Apps' Uninstall runs\n"
                 "  --screenshot OUT  render one frame to a PNG and exit; no display needed\n"
                 "  --size WxH        the size --screenshot and --layout-check use (default 1280x760)\n"
                 "  --layout-check    lay one frame out headless and report its layout faults\n\n"
@@ -55,6 +63,15 @@ int main(int argc, char** argv) {
             }
             std::println("OpenXR applications {}", a == "--use" ? "will use the simulated headset" : "will find no headset");
             return 0;
+        }
+        if (a == "--register-runtime" || a == "--unregister-runtime") {
+            bool remove = false, elevated = false;
+            for (int k = i + 1; k < argc; k++) {
+                remove |= std::string(argv[k]) == "--remove";
+                elevated |= std::string(argv[k]) == "--elevated";
+            }
+            return a == "--register-runtime" ? oxs::register_runtime_command(elevated)
+                                             : oxs::unregister_runtime_command(remove, elevated);
         }
         if (a == "--headset") { headset = true; continue; }
         if (a == "--app" && i + 1 < argc) { app_name = argv[++i]; continue; }
