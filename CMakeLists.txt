@@ -126,7 +126,17 @@ endif()
 # it on Ubuntu 24.04 for each release.
 if(NOT WIN32)
     # The licences: ours and the third parties' (THIRD_PARTY_NOTICES.md, which --licenses also prints).
+    # Also both in one `copyright`, Debian's name for it: a minimized Ubuntu (its containers, its minimal
+    # installs) keeps nothing else of /usr/share/doc.
     install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION "${CMAKE_INSTALL_DOCDIR}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${PROJECT_SOURCE_DIR}/LICENSE" "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md")
+    file(READ "${PROJECT_SOURCE_DIR}/LICENSE" _oxs_license)
+    file(READ "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" _oxs_notices)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/copyright"
+        "openxr-sim -- https://github.com/helpsl/openxr-sim\n\nopenxr-sim is licensed under the Apache License, Version 2.0:\n\n"
+        "${_oxs_license}\n\n${_oxs_notices}")
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/copyright" DESTINATION "${CMAKE_INSTALL_DOCDIR}")
     if(OPENXR_SIM_BUILD_SIMULATOR)
         install(FILES packaging/openxr-sim.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
     endif()

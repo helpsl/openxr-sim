@@ -256,6 +256,7 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          set -x   # which check it was, when one fails
           . /etc/os-release; echo "$PRETTY_NAME"
           apt-get update
           apt-get install -y ./dist/*.deb fonts-dejavu-core binutils
@@ -264,7 +265,9 @@ jobs:
           nm -D --defined-only "$lib" | grep -q ' xrNegotiateLoaderRuntimeInterface$'
           grep -q "\"$lib\"" /usr/share/openxr/1/openxr_sim.json
           test -f /usr/share/applications/openxr-sim.desktop
-          test -s /usr/share/doc/openxr-sim/THIRD_PARTY_NOTICES.md
+          # copyright, not THIRD_PARTY_NOTICES.md: Ubuntu's images keep only that of /usr/share/doc.
+          grep -q "JsonCpp 1.9.8" /usr/share/doc/openxr-sim/copyright
+          grep -q "Apache License" /usr/share/doc/openxr-sim/copyright
           openxr-sim --licenses | grep -q "JsonCpp 1.9.8"
           openxr-sim-mcp --licenses | grep -q "JsonCpp 1.9.8"
           openxr-sim --screenshot /tmp/frame.png --size 640x400

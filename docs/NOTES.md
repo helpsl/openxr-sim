@@ -491,7 +491,9 @@ tag's release: the Windows .exe (built and tested on the runner, previous sectio
 * **The third parties' licences** are `THIRD_PARTY_NOTICES.md`: GLFW (zlib) and the Wayland protocol
   files its Linux build compiles (MIT), Clay (zlib), stb (MIT or public domain), JsonCpp when bundled
   (MIT or public domain), and the Khronos headers compiled against (Apache-2.0 or MIT). The .deb installs
-  it with LICENSE in /usr/share/doc/openxr-sim/; and as the Windows .exe is the whole download, it is
+  it with LICENSE in /usr/share/doc/openxr-sim/, and both in one `copyright` there -- a minimized Ubuntu
+  (its containers, its minimal installs) drops everything else of /usr/share/doc, which is how CI's
+  Ubuntu containers failed the first check of the notices while Debian's passed; and as the Windows .exe is the whole download, it is
   compiled into both programs (`cmake/notices.cmake`, bytes, as MSVC limits a string literal's length)
   and printed by `--licenses`.
 * **Checked as installed** in CI: the one .deb `apt install`ed in Ubuntu 24.04, Ubuntu 26.04 and Debian 13
