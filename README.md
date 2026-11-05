@@ -42,7 +42,8 @@ and Vulkan headers (no loaders: the runtime links neither):
     ninja -C build-win
     tests/sim-test.sh build-win                                      # from Linux, under Wine
 
-The result to hand out is `openxr-sim.exe` alone: the runtime is inside it.
+The result to hand out is `openxr-sim.exe` alone: the runtime is inside it. Each release on GitHub has it,
+built and tested by `.github/workflows/build.yml` (Direct3D 11 and 12 on the runner's software adapter).
 
 ## Using it
 

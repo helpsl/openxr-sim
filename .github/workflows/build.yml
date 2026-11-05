@@ -1,0 +1,230 @@
+# BUILD, TEST AND RELEASE.
+#
+#   windows  openxr-sim.exe (the runtime inside it) with MSVC, then the end-to-end test on the runner's
+#            own Direct3D -- WARP, Windows' software adapter, the first and only one there: D3D11 and D3D12,
+#            each alone and with every layer type, the eyes' pixels checked as tests/sim-test.sh checks
+#            them. For a tag, the tested .exe becomes the release's download.
+#   linux    a build, to keep it building: no OpenXR loader is installed, so the test's client is not.
+#
+# A release for a tag pushed before this file existed: Actions > build > Run workflow, with the tag. The
+# checker is here rather than in tests/ so that such a tag's own tree need not contain it.
+#
+# The headers are Khronos's, at the versions LOS builds against (forge/recipes/openxr-sdk, vulkan-headers);
+# neither loader is linked (README.md, "Building").
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release this tag (for example v0.8.0); empty builds and tests the branch only"
+        required: false
+        default: ""
+
+env:
+  OPENXR_SDK_REF: release-1.1.65
+  VULKAN_HEADERS_REF: v1.4.367
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write   # the release, for a tag; nothing else is written
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name || '') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          path: src
+      - uses: actions/checkout@v4
+        with:
+          repository: KhronosGroup/OpenXR-SDK
+          ref: ${{ env.OPENXR_SDK_REF }}
+          path: openxr-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: ${{ env.VULKAN_HEADERS_REF }}
+          path: vulkan-headers
+
+      # Configure and build in one step: vcvars64's environment does not outlive the step that set it.
+      - name: Build
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VS=%%i
+          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          where ninja >nul 2>nul || pip install ninja || exit /b 1
+          cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+            -DOPENXR_SIM_OPENXR_INCLUDE=%CD%\openxr-sdk\include -DOPENXR_SIM_VULKAN_INCLUDE=%CD%\vulkan-headers\include || exit /b 1
+          cmake --build build || exit /b 1
+
+      - name: Test on Direct3D (WARP)
+        timeout-minutes: 5
+        shell: python
+        run: |
+          import os, subprocess, sys, time
+          build = os.path.abspath("build")
+          out = os.path.abspath("test-output")
+          failures = 0
+
+          def pixel(path, x, y):
+              data = open(path, "rb").read()
+              parts = data.split(b"\n", 3)
+              w, h = map(int, parts[1].split())
+              o = len(data) - w * h * 3 + (y * w + x) * 3
+              return tuple(data[o:o + 3])
+
+          def expect(what, path, x, y, want, near=0):
+              global failures
+              try:
+                  got = pixel(path, x, y)
+              except Exception as e:
+                  got = str(e)
+              ok = isinstance(got, tuple) and all(abs(a - b) <= near for a, b in zip(got, want))
+              print(f"  {what:<50} {'ok' if ok else f'FAILED ({got}, wanted {want})'}")
+              failures += not ok
+
+          # tests/sim-test.sh's checks: the eyes are 256 square, the blue square 64 at the top left.
+          def eyes(d):
+              expect("left eye: red", f"{d}/left.ppm", 200, 200, (255, 0, 0))
+              expect("left eye: blue square top left", f"{d}/left.ppm", 10, 10, (0, 0, 255))
+              expect("right eye: green", f"{d}/right.ppm", 200, 200, (0, 255, 0))
+              expect("right eye: blue square top left", f"{d}/right.ppm", 10, 10, (0, 0, 255))
+              expect("right eye: no square bottom left", f"{d}/right.ppm", 10, 240, (0, 255, 0))
+
+          # And its layers(): where each layer lands after the head turn.
+          def layers(d):
+              L, R = f"{d}/left.ppm", f"{d}/right.ppm"
+              expect("quad A: yellow, both eyes", L, 148, 148, (255, 255, 0))
+              expect("quad A: yellow in the right eye too", R, 148, 148, (255, 255, 0))
+              expect("quad A: its blue square top left", L, 108, 108, (0, 0, 255))
+              expect("quad A: not mirrored (top right)", L, 148, 108, (255, 255, 0))
+              expect("quad A: not flipped (bottom left)", L, 108, 148, (255, 255, 0))
+              expect("cylinder: magenta, left eye", L, 128, 90, (255, 0, 255))
+              expect("cylinder: its blue at its left", L, 96, 90, (0, 0, 255))
+              expect("cylinder: not in the right eye", R, 128, 90, (0, 255, 0))
+              expect("equirect: cyan, right eye", R, 140, 205, (0, 255, 255))
+              expect("equirect: its blue top left", R, 100, 185, (0, 0, 255))
+              expect("equirect: not in the left eye", L, 140, 205, (255, 0, 0))
+              expect("quad B: its opaque blue square", L, 45, 192, (0, 0, 255))
+              expect("quad B: half white over red", L, 70, 192, (255, 188, 188), near=2)
+              expect("quad B: half white over green", R, 70, 192, (188, 255, 188), near=2)
+
+          def run(name, args):
+              global failures
+              d = os.path.join(out, name)
+              os.makedirs(d, exist_ok=True)
+              print(f"== {name}", flush=True)
+              env = dict(os.environ, OPENXR_SIM_DEVICE="sim", OPENXR_SIM_HEADLESS=d, OPENXR_SIM_LOG="1")
+              try:
+                  r = subprocess.run([os.path.join(build, "openxr-sim-client.exe")] + args, env=env, timeout=60,
+                                     stdin=subprocess.DEVNULL, capture_output=True, text=True)
+                  sys.stdout.write(r.stdout)
+                  sys.stdout.write("".join("  " + l for l in r.stderr.splitlines(True)))
+                  if r.returncode != 0:
+                      print(f"  the client exited {r.returncode}")
+                      failures += 1
+              except subprocess.TimeoutExpired:
+                  print("  the client took over 60 s")
+                  failures += 1
+              # The simulator outlives the session by as long as it takes to write; its summary comes last.
+              summary = os.path.join(d, "summary")
+              for _ in range(100):
+                  if os.path.exists(summary):
+                      break
+                  time.sleep(0.1)
+              if os.path.exists(summary):
+                  text = open(summary).read()
+                  print("  the simulator: " + text.strip())
+                  failures += "layout faults 0" not in text
+              else:
+                  print("  the simulator wrote no summary")
+                  failures += 1
+              eyes(d)
+              if "--layers" in args:
+                  layers(d)
+
+          for api in ("d3d11", "d3d12"):
+              run(api, [f"--{api}"])
+              run(f"{api}-layers", [f"--{api}", "--layers"])
+          print(f"{failures} failed")
+          sys.exit(1 if failures else 0)
+
+      - name: Keep the test's pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-output
+          path: test-output
+          if-no-files-found: ignore
+
+      - name: Name the download
+        shell: pwsh
+        run: |
+          $version = if ($env:TAG) { $env:TAG -replace '^v', '' } else { "${{ github.sha }}".Substring(0, 7) }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $exe = "dist/openxr-sim-$version-windows-x64.exe"
+          Copy-Item build/openxr-sim.exe $exe
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  $(Split-Path $exe -Leaf)" | Out-File -Encoding ascii "$exe.sha256"
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openxr-sim-windows-x64
+          path: dist
+
+      - name: Release
+        if: env.TAG != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = $env:TAG -replace '^v', ''
+          $notes = @"
+          Windows: download ``openxr-sim-$version-windows-x64.exe`` -- the runtime is inside it. Run it and press
+          "Make this the active runtime"; Windows asks an administrator to allow installing it in Program Files.
+          Settings > Apps removes it again, and "Go back to ..." restores the runtime it replaced.
+
+          Linux: build from source (README.md, "Building").
+          "@
+          gh release create $env:TAG (Get-ChildItem dist).FullName --repo "${{ github.repository }}" --verify-tag `
+            --title "openxr-sim $version" --notes $notes --generate-notes
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          path: src
+      - uses: actions/checkout@v4
+        with:
+          repository: KhronosGroup/OpenXR-SDK
+          ref: ${{ env.OPENXR_SDK_REF }}
+          path: openxr-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: ${{ env.VULKAN_HEADERS_REF }}
+          path: vulkan-headers
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config g++-14 \
+            libfontconfig-dev libdbus-1-dev libwayland-dev libxkbcommon-dev libgl-dev libjsoncpp-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+      # GCC 14 for std::println; Ubuntu 24.04's GLFW is 3.3, so the bundled one.
+      - name: Build
+        env:
+          CC: gcc-14
+          CXX: g++-14
+        run: |
+          cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENXR_SIM_BUNDLED_GLFW=ON \
+            -DOPENXR_SIM_OPENXR_INCLUDE=$PWD/openxr-sdk/include -DOPENXR_SIM_VULKAN_INCLUDE=$PWD/vulkan-headers/include
+          cmake --build build
