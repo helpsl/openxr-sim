@@ -302,3 +302,102 @@ Not yet seen working: no WebXR session has reached this runtime. The candidate, 
 
 Open: working inside the GPU sandbox, so a browser needs only the feature flag -- the simulator started
 outside Chrome, and the runtime reaching it by whatever that sandbox leaves open.
+
+## Windows (0.8.0, 2026-11-05)
+
+The owner: "Can you build it for windows now". Built with Microsoft's compiler through Wine (los-wine's
+`msvc.cmake` toolchain) and tested under Wine; nothing here has run on a Windows machine yet.
+
+    cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=/usr/share/los-wine/msvc.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DOPENXR_SIM_OPENXR_INCLUDE=DIR -DOPENXR_SIM_VULKAN_INCLUDE=DIR -S . -B build-win
+    ninja -C build-win && tests/sim-test.sh build-win
+
+(DIR holding `openxr/` and `vulkan/` -- headers only, copied in: pkg-config is not asked on WIN32, as it
+answers for the Linux machine.)
+
+* **The platform layer** (`runtime/plat_win32.c`): the simulator started as a child with a pagefile-backed
+  file mapping and an anonymous pipe, named on its command line (`--link SHM,PIPE`, which `sim/link.cpp`
+  already read) and inherited through `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` -- those two and nothing else
+  the application left inheritable. The write end is `PIPE_NOWAIT`, so a full pipe never blocks a frame.
+  A closed simulator is seen by its process having exited, or by a wake write failing: `PeekNamedPipe`
+  wants read access, which the write end has not. XrTime is `QueryPerformanceCounter` in nanoseconds.
+  The config is `%APPDATA%\openxr-sim\config`; the simulator is the `openxr-sim.exe` beside the DLL.
+  The one export is in `runtime/openxr_sim.def`: `openxr_loader_negotiation.h` has already declared it
+  without `__declspec(dllexport)`, which MSVC calls a redefinition (C2375).
+* **The simulator's** (`sim/os_win32.cpp`): fonts by GDI's `GetFontData` -- the bytes of whatever font
+  Windows, or Wine, chose for Segoe UI and Consolas -- not by file name, since Wine's prefix has Tahoma
+  and no Segoe, and that through its own font path rather than `C:\Windows\Fonts`. Light or dark from
+  `AppsUseLightTheme`, the accent from `DWM\AccentColor` (0xAABBGGRR). The manifest
+  (`sim/openxr-sim.manifest`) makes UTF-8 the process's code page, so a `std::string` path opens the
+  file its wide twin names.
+* **CLAY IS COMPILED AS C++ NOW** (`sim/clay_impl.cpp`). With MSVC, `CLAY_PACKED_ENUM` in C is
+  `__pragma(pack(push, 1)) enum`, which packs nothing -- pack is for struct members -- so Clay's enums
+  were four bytes in the library and one (`enum : uint8_t`) in `sim/ui.cpp`, and every Clay struct had
+  two layouts. The first `--screenshot` under Wine read the height (760.0, as bits 0x443e0000) as an
+  array's length, reported "no text measurement function" without end, and grew past 10 GB; GCC packs
+  both ways, which is why Linux never showed it. That runaway, run with a 120 s limit, is the likeliest
+  reason the session running it died twice (not established).
+* **The test client needs no loader on Windows** (`tests/sim_client.c`, "ON WINDOWS"): it opens
+  `openxr_sim.dll`, negotiates as the loader would, takes OpenXR from it and Vulkan from `vulkan-1.dll`.
+  Building the Khronos loader for Windows was refused by the session's permission check (code from a
+  fresh clone), and what the test is about -- the runtime and the simulator -- is all a loader hands on to.
+* **Under Wine, nothing that needs no display gets one**: `tests/sim-test.sh` runs a Windows build with
+  plain `wine`, DISPLAY and WAYLAND_DISPLAY unset. `los-wine run` gives a program the desktop and, to do
+  so, replaces a server a build started without one.
+
+Verified (2026-11-05, Wine 11, lavapipe): `tests/sim-test.sh build-win` -- the Vulkan, layers, hands and
+hand-interaction runs, 114 checks, all passing (the OpenGL runs need EGL and are left out); `--screenshot`
+in both themes and `--layout-check` (0 faults). Not yet: Direct3D 11 and 12 sessions, OpenGL through WGL,
+the MCP server, a 32-bit build, and any of it on Windows itself.
+
+## Making it the active runtime: one .exe (0.8.0, 2026-11-05)
+
+The owner: "How do windows users install the runtime, can we make it so it has an option in the app to
+register it as the runtime?", then "Could we just make the exe self unpack, or is it possible to have the
+runtime point at the exe instead of a dll, keeping it just a single file?"
+
+* **Not the .exe as the runtime**: the loader `LoadLibrary`s the manifest's `library_path`, and an .exe
+  loaded that way has neither its entry point nor its C runtime's start-up run -- no heap set up, no
+  constructors. It would seem to work until it did not.
+* **The .exe carries the DLL** (`sim/CMakeLists.txt`): `openxr_sim.dll` is resource 1 (RCDATA), and the .rc
+  depends on the DLL, so a rebuilt runtime relinks the .exe. Through Wine the .rc names it `Z:/...`: the
+  resource compiler opens that path itself, and los-wine's wrappers translate arguments, not file contents.
+  The runtime an .exe installs is therefore always its own build's -- the shared memory's version check
+  would refuse any other.
+* **What the loader reads** (OpenXR SDK 1.1.65, `src/loader/manifest_file.cpp`): `XR_RUNTIME_JSON`, else
+  `HKLM\SOFTWARE\Khronos\OpenXR\1\ActiveRuntime` -- HKEY_LOCAL_MACHINE only, nothing per user -- as REG_SZ
+  (it passes `RRF_RT_REG_SZ | REG_EXPAND_SZ`, and REG_EXPAND_SZ there is a type number equal to the flag, not
+  a request to expand), and the path must be a regular file. A 64-bit application reads the 64-bit view,
+  a 32-bit one `WOW6432Node`, where this writes nothing: there is no 32-bit build.
+* **So making it active is installing it** (`sim/install_win32.cpp`), as an administrator: the .exe copied
+  and the DLL unpacked into `%ProgramFiles%\openxr-sim\<version>\` with a manifest beside them,
+  `ActiveRuntime` pointed there, the runtime it replaced kept in `HKLM\SOFTWARE\openxr-sim\PreviousRuntime`
+  (never our own older version), an `AvailableRuntimes` entry for runtime switchers, and an entry in
+  Settings > Apps whose Uninstall runs `--unregister-runtime --remove`. Program Files, not wherever the
+  download is: ActiveRuntime is every user's, and Downloads is one user's and gets emptied. A VERSIONED
+  folder because a running application holds the DLL it loaded and Windows will not replace a file in use;
+  other versions' folders go at once, or at the next restart.
+* **The window asks for the rights**: its "Make this the active runtime" starts the .exe again with
+  `runas` (the UAC prompt) and `--register-runtime --elevated`, on a thread of its own, and reads the answer
+  from the child's exit status (`RegisterExit`; a windowed program cannot print). A cancelled prompt is
+  "Cancelled: nothing was changed", not an error. `--elevated` stops a child that still finds itself
+  unelevated from asking again -- Wine has no UAC, and `runas` there just runs it.
+* **Linux has the same card** (`sim/install_posix.cpp`), with nothing to ask: the loader reads
+  `$XDG_CONFIG_HOME/openxr/1/active_runtime[.<arch>].json` before `XDG_CONFIG_DIRS` and `/etc`, so a link
+  there to the installed manifest (`OPENXR_SIM_MANIFEST`) is this user's choice, and whatever the user had
+  is moved aside (`.before-openxr-sim`) and put back. Ours is recognised by the LIBRARY a manifest names,
+  not only by the file: LOS's `/etc/xdg/openxr/1/active_runtime.json` is a copy of our manifest, and the
+  card offered "Go back to openxr-sim" until it was. When the active runtime is the system's choice the card
+  says so and offers nothing -- a link of the user's cannot take that back. A build tree has no installed
+  manifest, and the card says the runtime is not installed rather than link to nothing.
+
+Verified (2026-11-05), in a scratch Wine prefix (never the owner's, whose ActiveRuntime is wineopenxr's
+and serves their Windows OpenXR programs): register -- the files, byte-identical DLL, every value above;
+again (PreviousRuntime still wineopenxr); an update from a planted 0.6.9 (its folder gone); unregister
+(wineopenxr active again); and the Uninstall entry's command (keys gone, the running .exe and the folders
+queued for the restart); the end-to-end session with the runtime loaded from Program Files, starting the
+installed simulator; the card in each state, 0 layout faults. Linux, with `XDG_CONFIG_HOME` in a scratch
+directory and a `/usr` build: register, again, unregister back to the user's own file, and the system's
+choice shown as such. NOT verified: the UAC prompt and the elevated relaunch (Wine has neither), the
+Khronos loader finding the runtime through the registry (no Windows loader built), and clicking the button
+-- the commands it runs were tested, the click was not.

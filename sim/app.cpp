@@ -151,7 +151,10 @@ bool set_configured_device(const std::string& device, std::string* error) {
 
 // ---- the window -------------------------------------------------------------------------------
 
-App::App(std::string app_name) : app_name_(std::move(app_name)) { use_sim_ = configured_device() == "sim"; }
+App::App(std::string app_name) : app_name_(std::move(app_name)) {
+    use_sim_ = configured_device() == "sim";
+    runtime_ = runtime_state();
+}
 
 App::~App() {
     {
@@ -162,6 +165,8 @@ App::~App() {
     control_.stop();
     link_.interrupt();
     if (link_thread_.joinable()) link_thread_.join();
+    // A permission prompt still open: its answer is waited for, as the change it makes is the person's.
+    if (runtime_thread_.joinable()) runtime_thread_.join();
 }
 
 bool App::fonts_ready(std::string* error) {
@@ -389,6 +394,59 @@ void App::build_idle(float w) {
              "When an application starts a VR session, its two eyes appear here and the mouse and keys move the headset "
              "and the controllers.", Role::Body, t.dim, { .wrap = true });
     }
+    {
+        Card card;
+        Style row;
+        row.w = Size::grow();
+        row.row = true;
+        row.gap = px(Space::L);
+        row.align_y = CLAY_ALIGN_Y_CENTER;
+        Box r(row);
+        {
+            Style words;
+            words.w = Size::grow();
+            words.gap = px(Space::XS);
+            Box wd(words);
+            text("Use the simulated headset", Role::Body, t.text);
+            text(use_sim_ ? "OpenXR applications find a headset, and this window opens when one starts a session."
+                          : "Off: OpenXR applications find no headset connected.",
+                 Role::Secondary, t.dim, { .wrap = true });
+        }
+        (void)w;
+        toggle("use", 0, use_sim_);
+    }
+    build_runtime_card();
+}
+
+// WHICH RUNTIME THE LOADER GIVES APPLICATIONS, and the one thing to do about it: make it this one, update
+// the registered copy to this build, or give back the one it replaced.
+void App::build_runtime_card() {
+    const Theme& t = theme();
+    const RuntimeState& st = runtime_;
+    std::string what, action;
+    bool make_active = true;
+    if (!st.can_register) {
+        what = "This simulator is not installed, so it cannot be made the active runtime: " + st.why_not + ".";
+    } else if (st.active_is_ours && st.system_choice) {
+        what = "This simulator, chosen for every user of this computer (" + st.active_path + ").";
+    } else if (st.active_is_ours && st.ours_is_this_build) {
+        what = "This simulator: OpenXR applications use it.";
+        make_active = false;
+        action = st.previous_name.empty() ? "Stop using it" : "Go back to " + st.previous_name;
+    } else if (st.active_is_ours) {
+        what = "openxr-sim " + st.ours_version + " is registered; this is " OPENXR_SIM_VERSION ".";
+        action = "Update it";
+    } else {
+        what = st.active_name.empty() ? std::string("None: OpenXR applications find no runtime.")
+                                      : st.active_name + ": OpenXR applications use it, not this simulator.";
+        action = "Make this the active runtime";
+    }
+#ifdef _WIN32
+    // Said before it happens: the prompt is Windows', and the copy is for every user.
+    if (make_active && st.can_register)
+        what += st.active_is_ours ? " Updating installs this version in Program Files, which Windows asks an administrator to allow."
+                                  : " Making it active installs it in Program Files for every user, which Windows asks an administrator to allow.";
+#endif
     Card card;
     Style row;
     row.w = Size::grow();
@@ -401,13 +459,26 @@ void App::build_idle(float w) {
         words.w = Size::grow();
         words.gap = px(Space::XS);
         Box wd(words);
-        text("Use the simulated headset", Role::Body, t.text);
-        text(use_sim_ ? "OpenXR applications find a headset, and this window opens when one starts a session."
-                      : "Off: OpenXR applications find no headset connected.",
-             Role::Secondary, t.dim, { .wrap = true });
+        text("The active OpenXR runtime", Role::Body, t.text);
+        text(what, Role::Secondary, t.dim, { .wrap = true });
+        if (runtime_busy_) text("Waiting for permission\xE2\x80\xA6", Role::Secondary, t.dim);
+        else if (!runtime_message_.empty()) text(runtime_message_, Role::Secondary, t.warning, { .wrap = true });
     }
-    (void)w;
-    toggle("use", 0, use_sim_);
+    if (!action.empty() && !runtime_busy_) button(make_active ? "runtime-on" : "runtime-off", 0, action, make_active ? ButtonKind::Primary : ButtonKind::Secondary);
+}
+
+void App::change_runtime(bool make_active) {
+    if (runtime_busy_.exchange(true)) return;
+    if (runtime_thread_.joinable()) runtime_thread_.join();
+    runtime_message_.clear();
+    dirty_ = true;
+    runtime_thread_ = std::thread([this, make_active] {
+        std::string error;
+        const RegisterResult r = make_active ? make_runtime_active(&error) : restore_previous_runtime(&error);
+        runtime_message_ = r == RegisterResult::Cancelled ? "Cancelled: nothing was changed." : r == RegisterResult::Failed ? error : "";
+        runtime_done_ = true;
+        Window::wake();
+    });
 }
 
 // ---- input ------------------------------------------------------------------------------------
@@ -465,6 +536,8 @@ void App::on_button(float x, float y, int button, bool pressed, int clicks) {
     } else if (tag == "reset") {
         rig_.reset();
         publish();
+    } else if (tag == "runtime-on" || tag == "runtime-off") {
+        change_runtime(tag == "runtime-on");
     } else if (tag == "use") {
         std::string error;
         if (set_configured_device(use_sim_ ? "null" : "sim", &error)) use_sim_ = !use_sim_;
@@ -489,7 +562,8 @@ void App::on_motion(float x, float y) {
     const auto h = ui_->hit(x, y);
     const std::string_view tag = h ? h->tag : "";
     win_.set_cursor(tag == "view" && link_.attached() ? Cursor::Move
-                    : tag == "hold" || tag == "part" || tag == "reset" || tag == "use" ? Cursor::Hand : Cursor::Arrow);
+                    : tag == "hold" || tag == "part" || tag == "reset" || tag == "use" || tag == "runtime-on" || tag == "runtime-off"
+                    ? Cursor::Hand : Cursor::Arrow);
     dirty_ = true;
 }
 
@@ -608,6 +682,11 @@ int App::run(std::string* error) {
             break;
         }
         if (frame_ready_.exchange(false)) on_frame_ready();
+        if (runtime_done_.exchange(false)) {
+            runtime_busy_ = false;
+            runtime_ = runtime_state();
+            dirty_ = true;
+        }
         if (link_.attached() && (now_s() - last_tick_ >= (keys_.empty() ? 0.24 : 1.0 / 90))) tick();
         if (dirty_) draw();
     }

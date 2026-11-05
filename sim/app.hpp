@@ -14,6 +14,7 @@
 #include "canvas.hpp"
 #include "control.hpp"
 #include "font.hpp"
+#include "install.hpp"
 #include "link.hpp"
 #include "rig.hpp"
 #include "ui.hpp"
@@ -92,6 +93,16 @@ private:
     float scroll_ = 0;
     bool use_sim_ = false;        // the idle window's switch: `device = sim` in the configuration
     bool dirty_ = true;
+
+    // THE ACTIVE RUNTIME (sim/install.hpp), the idle window's second card. Changing it may wait for
+    // Windows' permission prompt, so it runs on a thread of its own, which says when it is done.
+    void build_runtime_card();
+    void change_runtime(bool make_active);
+    RuntimeState runtime_;
+    std::thread runtime_thread_;
+    std::atomic<bool> runtime_busy_{ false }, runtime_done_{ false };
+    std::string runtime_message_;   // the last change's failure, or that it was cancelled; written by that thread
+                                    // before runtime_done_, read by the window's after it
 
     Fonts fonts_;
     bool fonts_loaded_ = false;

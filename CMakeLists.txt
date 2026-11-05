@@ -1,7 +1,7 @@
 # openxr-sim: an OpenXR runtime whose headset is a window on the desktop. README.md says what it is,
 # docs/DESIGN.md how it works.
 cmake_minimum_required(VERSION 3.21)
-project(openxr-sim VERSION 0.7.1 LANGUAGES C CXX)
+project(openxr-sim VERSION 0.8.0 LANGUAGES C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 23)
@@ -58,7 +58,8 @@ endif()
 # A MODULE, in a directory of its own: nothing links it, the loader opens it by the path in its manifest.
 add_library(openxr_sim MODULE ${OXS_RUNTIME_SOURCES})
 target_include_directories(openxr_sim PRIVATE runtime common ${OPENXR_SIM_OPENXR_INCLUDE} ${OPENXR_SIM_VULKAN_INCLUDE})
-target_compile_definitions(openxr_sim PRIVATE XR_EXTENSION_PROTOTYPES)
+target_compile_definitions(openxr_sim PRIVATE XR_EXTENSION_PROTOTYPES OPENXR_SIM_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    OPENXR_SIM_VERSION_MINOR=${PROJECT_VERSION_MINOR} OPENXR_SIM_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 target_compile_options(openxr_sim PRIVATE ${OXS_WARNINGS})
 if(WIN32)
     set(OXS_LIBDIR "${CMAKE_INSTALL_BINDIR}")

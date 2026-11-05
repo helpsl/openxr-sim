@@ -32,7 +32,8 @@ typedef unsigned int EGLenum;
 #include "xrmath.h"
 
 #define RUNTIME_NAME "openxr-sim"
-#define RUNTIME_VERSION XR_MAKE_VERSION(0, 7, 0)
+// The project's version (CMakeLists.txt), which xrGetInstanceProperties reports.
+#define RUNTIME_VERSION XR_MAKE_VERSION(OPENXR_SIM_VERSION_MAJOR, OPENXR_SIM_VERSION_MINOR, OPENXR_SIM_VERSION_PATCH)
 
 void say(const char *fmt, ...) OXS_PRINTF(1, 2);
 const struct oxs_device *device(void);

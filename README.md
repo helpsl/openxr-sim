@@ -12,7 +12,7 @@ It began as LOS's runtime (`apps/los-openxr`) and is its own project since 0.7.0
 
 ## What it does
 
-* Vulkan, OpenGL and OpenGL ES sessions (Linux); Windows is being added (D3D11, D3D12, Vulkan, WGL).
+* Vulkan, OpenGL and OpenGL ES sessions on Linux; Vulkan on Windows, with Direct3D 11 and 12 and WGL to come.
 * Composition layers: projection, quad, cylinder, equirect (2), each composited where it belongs.
 * Touch-style controllers by any profile the application suggests; `XR_EXT_hand_tracking` and
   `XR_EXT_hand_interaction` with hands that follow the controllers.
@@ -34,11 +34,27 @@ Installed, the runtime is `<libdir>/openxr-sim/libopenxr_sim.so` with its manife
 `share/openxr/1/openxr_sim.json`; `-DOPENXR_SIM_INSTALL_ACTIVE_RUNTIME=ON` also makes it the system's
 default runtime. GLFW, Clay and stb are in `third_party/` (GLFW is built from there on Windows).
 
+Windows, with MSVC (on Windows, or from Linux through Wine with los-wine's toolchain file), and the OpenXR
+and Vulkan headers (no loaders: the runtime links neither):
+
+    cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DOPENXR_SIM_OPENXR_INCLUDE=DIR -DOPENXR_SIM_VULKAN_INCLUDE=DIR   # DIR holds openxr/ and vulkan/
+    ninja -C build-win
+    tests/sim-test.sh build-win                                      # from Linux, under Wine
+
+The result to hand out is `openxr-sim.exe` alone: the runtime is inside it.
+
 ## Using it
 
     openxr-sim --use        # OpenXR applications get the simulated headset
     openxr-sim --unuse      # they find none connected again
     OPENXR_SIM_DEVICE=sim some-openxr-app    # per process
+    openxr-sim --register-runtime            # make it the active OpenXR runtime (and --unregister-runtime)
+
+The window has the same choice: "Make this the active runtime". On Windows that installs it in Program Files
+and registers it for every user, which asks for an administrator, and Settings > Apps can remove it again; on
+Linux it is a link in `~/.config/openxr/1`, for you alone. Either way the runtime it replaced comes back
+with "Go back to ...".
 
 Then start an OpenXR application: the simulator's window opens with its session. Drag to turn, W A S D Q E
 to move, Tab for the next device, Space/G/Z/X/M/C and the arrows for a hand's controls.

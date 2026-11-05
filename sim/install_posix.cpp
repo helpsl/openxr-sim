@@ -91,20 +91,53 @@ fs::path chosen(const std::vector<fs::path>& dirs) {
     return {};
 }
 
-bool is_ours(const fs::path& p) {
+std::string read_file(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return in ? std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()) : std::string();
+}
+
+// The library a manifest names, as a path: a relative one is the manifest's own directory's.
+fs::path library_of(const fs::path& manifest) {
+    std::smatch m;
+    const std::string text = read_file(manifest);
+    if (!std::regex_search(text, m, std::regex(R"re("library_path"\s*:\s*"([^"]*)")re"))) return {};
+    fs::path lib = m[1].str();
+    if (lib.is_relative()) lib = fs::path(manifest).parent_path() / lib;
     std::error_code ec;
-    return !p.empty() && fs::equivalent(p, OPENXR_SIM_MANIFEST, ec);
+    const fs::path c = fs::weakly_canonical(lib, ec);
+    return ec ? lib : c;
+}
+
+// OURS: our manifest itself, or any manifest naming our library -- a package's active_runtime.json is
+// usually a copy of the runtime's manifest, not a link to it (LOS's is).
+bool is_ours(const fs::path& p) {
+    if (p.empty()) return false;
+    std::error_code ec;
+    if (fs::equivalent(p, OPENXR_SIM_MANIFEST, ec)) return true;
+    const fs::path a = library_of(p), b = library_of(OPENXR_SIM_MANIFEST);
+    return !a.empty() && !b.empty() && a == b;
 }
 
 // runtime.name from a manifest, else its library's file name (install_win32.cpp, manifest_name).
 std::string manifest_name(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return {};
-    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::string text = read_file(path);
+    if (text.empty()) return {};
     std::smatch m;
     if (std::regex_search(text, m, std::regex(R"re("name"\s*:\s*"([^"]*)")re")) && !m[1].str().empty()) return m[1].str();
     if (std::regex_search(text, m, std::regex(R"re("library_path"\s*:\s*"([^"]*)")re"))) return fs::path(m[1].str()).filename().string();
     return path.filename().string();
+}
+
+// A file or a link at `p`, even a link to nothing -- something the loader would trip over, or a backup.
+bool there(const fs::path& p) {
+    std::error_code ec;
+    const fs::file_status st = fs::symlink_status(p, ec);
+    return !ec && st.type() != fs::file_type::not_found;
+}
+
+bool links_to_ours(const fs::path& p) {
+    std::error_code ec;
+    return fs::is_symlink(fs::symlink_status(p, ec)) && fs::read_symlink(p, ec) == OPENXR_SIM_MANIFEST;
 }
 
 int do_register(std::string* error) {
@@ -117,13 +150,12 @@ int do_register(std::string* error) {
     // Whatever the user had, kept -- unless it is already ours, or a backup is already there (ours was made
     // active before, and the backup is the person's own choice, not this).
     for (const auto& n : names()) {
-        const fs::path p = dir / n;
-        if (!fs::is_symlink(p, ec) && !present(p)) continue;
-        if (is_ours(p)) { fs::remove(p, ec); continue; }
-        const fs::path aside = dir / (n + kAside);
-        if (!fs::is_symlink(aside, ec) && !present(aside)) fs::rename(p, aside, ec);
-        else fs::remove(p, ec);
-        if (ec) { *error = "could not move " + p.string() + " aside: " + ec.message(); return kRegisterFailed; }
+        const fs::path p = dir / n, aside = dir / (n + kAside);
+        if (!there(p)) continue;
+        std::error_code op;
+        if (is_ours(p) || links_to_ours(p) || there(aside)) fs::remove(p, op);
+        else fs::rename(p, aside, op);
+        if (op) { *error = "could not move " + p.string() + " aside: " + op.message(); return kRegisterFailed; }
     }
     fs::create_symlink(OPENXR_SIM_MANIFEST, dir / "active_runtime.json", ec);
     if (ec) { *error = "could not link " + (dir / "active_runtime.json").string() + ": " + ec.message(); return kRegisterFailed; }
@@ -133,12 +165,12 @@ int do_register(std::string* error) {
 int do_unregister(std::string* error) {
     const fs::path dir = user_dir();
     if (dir.empty()) return kRegisterOk;
-    std::error_code ec;
     for (const auto& n : names()) {
         const fs::path p = dir / n, aside = dir / (n + kAside);
-        if (is_ours(p) || (fs::is_symlink(p, ec) && fs::read_symlink(p, ec) == OPENXR_SIM_MANIFEST)) fs::remove(p, ec);
-        if ((fs::is_symlink(aside, ec) || present(aside)) && !fs::is_symlink(p, ec) && !present(p)) fs::rename(aside, p, ec);
-        if (ec) { *error = "could not restore " + p.string() + ": " + ec.message(); return kRegisterFailed; }
+        std::error_code op;
+        if (there(p) && (is_ours(p) || links_to_ours(p))) fs::remove(p, op);
+        if (!op && there(aside) && !there(p)) fs::rename(aside, p, op);
+        if (op) { *error = "could not restore " + p.string() + ": " + op.message(); return kRegisterFailed; }
     }
     return kRegisterOk;
 }
@@ -152,8 +184,10 @@ RuntimeState runtime_state() {
     std::vector<fs::path> all{ user_dir() };
     for (const auto& d : system_dirs()) all.push_back(d);
     const fs::path active = chosen(all);
+    st.active_path = active.string();
     st.active_name = active.empty() ? std::string() : manifest_name(active);
     st.active_is_ours = is_ours(active);
+    st.system_choice = !active.empty() && active.parent_path() != user_dir();
     st.ours_is_this_build = st.active_is_ours;   // one installed copy, the package's
     if (st.active_is_ours) {
         // What restoring gives: the user's own file moved aside, else the system's choice.

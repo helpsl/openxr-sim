@@ -29,6 +29,10 @@ struct RuntimeState {
     std::string ours_version;    // the registered copy's version, when it is ours
     std::string previous_name;   // what restoring would make active again; empty when there is nothing
     std::string why_not;         // when !can_register: why
+    // Linux: the active runtime is the system's choice (/etc/xdg), not one this user made -- nothing here
+    // can take it back, so nothing is offered. Its file is `active_path`.
+    bool system_choice = false;
+    std::string active_path;
 };
 RuntimeState runtime_state();
 
