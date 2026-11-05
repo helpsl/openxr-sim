@@ -511,4 +511,7 @@ XR_RUNTIME_JSON, checking the eyes' pixels; then one frame, `--layout-check`, `-
 `apt remove`. The loaders: Ubuntu 24.04's is 1.0.20, Debian 13's and Ubuntu 26.04's 1.1.47.
 * 0.8.1's .deb (built on 24.04, system JsonCpp): Ubuntu 24.04 passed all of it; Debian 13 and Ubuntu
   26.04 could not install it (libjsoncpp25), which is what made 0.8.2 bundle JsonCpp.
+* 0.8.2's one .deb (built on 24.04, JsonCpp inside): Debian 13, Ubuntu 24.04 and Ubuntu 26.04 each passed
+  all of it -- 30 steps and 35 pixel checks -- plus the MCP server answering `initialize` (version 0.8.2)
+  and `tools/list` with no JsonCpp library loaded, and the notices in `copyright` and `--licenses`.
 
