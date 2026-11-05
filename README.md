@@ -20,6 +20,15 @@ It began as LOS's runtime (`apps/los-openxr`) and is its own project since 0.7.0
 
 `docs/DESIGN.md` says how it works and why; `docs/NOTES.md` is what was found out on the way.
 
+## Installing
+
+Each [release](https://github.com/helpsl/openxr-sim/releases) has `openxr-sim-<version>-windows-x64.exe` (the
+runtime is inside it) and, for Ubuntu 24.04 and newer, `openxr-sim_<version>_amd64.deb`:
+
+    sudo apt install ./openxr-sim_<version>_amd64.deb
+
+Then run `openxr-sim` and choose "Make this the active runtime" (below).
+
 ## Building
 
 Linux, with CMake 3.21+, a C11 and C++23 compiler, and the development files of: the OpenXR SDK
@@ -32,7 +41,9 @@ Linux, with CMake 3.21+, a C11 and C++23 compiler, and the development files of:
 
 Installed, the runtime is `<libdir>/openxr-sim/libopenxr_sim.so` with its manifest in
 `share/openxr/1/openxr_sim.json`; `-DOPENXR_SIM_INSTALL_ACTIVE_RUNTIME=ON` also makes it the system's
-default runtime. GLFW, Clay and stb are in `third_party/` (GLFW is built from there on Windows).
+default runtime. GLFW, Clay and stb are in `third_party/` (GLFW is built from there on Windows, and with
+`-DOPENXR_SIM_BUNDLED_GLFW=ON` anywhere). A .deb: configure with `-DCMAKE_INSTALL_PREFIX=/usr`, then
+`cpack` in the build directory.
 
 Windows, with MSVC (on Windows, or from Linux through Wine with los-wine's toolchain file), and the OpenXR
 and Vulkan headers (no loaders: the runtime links neither):

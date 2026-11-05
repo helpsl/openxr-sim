@@ -1,7 +1,7 @@
 # openxr-sim: an OpenXR runtime whose headset is a window on the desktop. README.md says what it is,
 # docs/DESIGN.md how it works.
 cmake_minimum_required(VERSION 3.21)
-project(openxr-sim VERSION 0.8.0 LANGUAGES C CXX)
+project(openxr-sim VERSION 0.8.1 LANGUAGES C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 23)
@@ -115,4 +115,36 @@ endif()
 # ---- tests -------------------------------------------------------------------------------------------
 if(OPENXR_SIM_BUILD_TESTS)
     add_subdirectory(tests)
+endif()
+
+# ---- a .deb (Linux) ----------------------------------------------------------------------------------
+# `cpack` in a build configured with -DCMAKE_INSTALL_PREFIX=/usr: the paths the runtime and its manifest
+# name are fixed when it is configured, so the package installs where the build was told it would be.
+# The libraries it links are found by dpkg-shlibdeps; what GLFW opens at run time (Wayland's and X11's
+# client libraries, xkbcommon) it cannot see, so those are named here. .github/workflows/build.yml builds
+# it on Ubuntu 24.04 for each release.
+if(NOT WIN32)
+    if(OPENXR_SIM_BUILD_SIMULATOR)
+        install(FILES packaging/openxr-sim.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+    endif()
+    set(CPACK_GENERATOR DEB)
+    set(CPACK_PACKAGE_NAME openxr-sim)
+    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+    set(CPACK_PACKAGE_CONTACT "Lawrence Helps <lawrence@helpsl.net>")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "OpenXR runtime with a simulated headset in a window")
+    # CPack writes the control file's Description from these: the summary as its first line, then this.
+    set(CPACK_PACKAGE_DESCRIPTION "An OpenXR application runs as it would on a headset; its two eyes appear side by side on \
+the desktop, and the headset and both controllers are moved with the mouse and keyboard, a control socket, or an MCP \
+server (openxr-sim-mcp). Without the simulated headset switched on it reports no headset connected, so applications \
+with an optional VR mode start normally. To use it, run openxr-sim and choose Make this the active runtime.")
+    set(CPACK_DEBIAN_PACKAGE_SECTION utils)
+    set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/helpsl/openxr-sim")
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libxkbcommon0, libwayland-cursor0, libwayland-egl1")
+    set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "libopenxr-loader1, libdecor-0-0, libx11-6, libxrandr2, libxinerama1, libxcursor1, libxi6")
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    set(CPACK_PACKAGING_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
+    set(CPACK_STRIP_FILES ON)
+    set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
+    include(CPack)
 endif()

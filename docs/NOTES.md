@@ -456,3 +456,27 @@ directory and a `/usr` build: register, again, unregister back to the user's own
 choice shown as such. NOT verified: the UAC prompt and the elevated relaunch (Wine has neither), the
 Khronos loader finding the runtime through the registry (no Windows loader built), and clicking the button
 -- the commands it runs were tested, the click was not.
+
+## Releases on GitHub, and a .deb (0.8.1, 2026-11-05)
+
+The owner: "Can we also package a deb or appimage for linux". `.github/workflows/build.yml` makes each
+tag's release: the Windows .exe (built and tested on the runner, previous sections) and
+`openxr-sim_<version>_amd64.deb` from CPack (`CMakeLists.txt`, "a .deb").
+
+* **A .deb, not an AppImage**: the loader finds a runtime by a manifest naming its library's path, and an
+  AppImage is mounted somewhere new each time it starts -- it would have to unpack itself somewhere fixed,
+  as the .exe does, to be one. The .deb puts the runtime and manifest where `sim/install_posix.cpp`'s
+  OPENXR_SIM_MANIFEST says, so "Make this the active runtime" works as installed.
+* **Paths are fixed at configure time** (the manifest's `library_path`, OPENXR_SIM_MANIFEST, OPENXR_SIM_PATH),
+  so the package is built with `-DCMAKE_INSTALL_PREFIX=/usr` and installs at that prefix
+  (`CPACK_PACKAGING_INSTALL_PREFIX`).
+* **Depends**: dpkg-shlibdeps for what is linked; GLFW `dlopen`s Wayland's cursor and EGL libraries and
+  xkbcommon, which it cannot see, so those are named; X11's and libdecor are Recommends (a Wayland
+  desktop needs no X11), as is the OpenXR loader (applications need it, the runtime does not).
+* **Built on Ubuntu 24.04**, so for it and newer: GCC 14 for `std::println`, and GLFW bundled, since its
+  GLFW is 3.3. The desktop entry moved here from LOS's recipe (`packaging/openxr-sim.desktop`).
+* **Checked as installed**: `apt install` of the .deb on the runner, then the runtime's export, the
+  manifest naming it, one frame (`--screenshot`) and `--layout-check`. Not the end-to-end test: Ubuntu's
+  OpenXR loader is older than the headers the client is built with.
+* **v0.8.0's release was made before the .deb existed** and has only the .exe; its tree has no CPack rules.
+

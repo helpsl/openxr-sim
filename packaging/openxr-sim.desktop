@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OpenXR Simulator
+Comment=Try OpenXR applications without a headset
+Exec=openxr-sim
+Icon=input-gaming
+Terminal=false
+Categories=Development;
+StartupNotify=true
+StartupWMClass=openxr-sim
