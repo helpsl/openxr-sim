@@ -4,9 +4,11 @@
 #            own Direct3D -- WARP, Windows' software adapter, the first and only one there: D3D11 and D3D12,
 #            each alone and with every layer type, the eyes' pixels checked as tests/sim-test.sh checks
 #            them. For a tag, the tested .exe becomes the release's download.
-#   linux    openxr-sim_<version>_amd64.deb, built on Ubuntu 24.04 (CMakeLists.txt, "a .deb"), installed, and
-#            the installed copy checked: one frame and its layout, the runtime's export, the manifest naming
-#            it. Not the end-to-end test: no OpenXR loader new enough is in Ubuntu for its client.
+#   linux    a .deb for each distribution, built in that distribution's own container so it links that
+#            system's libraries (CMakeLists.txt, "a .deb"): Ubuntu 24.04, Ubuntu 26.04, Debian 13. One deb
+#            for all cannot be: their library versions differ (jsoncpp is libjsoncpp25 on 24.04, 26 after).
+#            Each is installed with apt and the installed copy checked: one frame and its layout, the
+#            runtime's export, the manifest naming it. The end-to-end chain on each was run in VMs (docs/NOTES.md).
 #   release  for a tag, once both have passed: both downloads on the tag's release, made if it is not there.
 #
 # A release for a tag pushed before this file existed: Actions > build > Run workflow, with the tag. The
@@ -185,7 +187,33 @@ jobs:
 
   linux:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: ubuntu24.04
+            image: ubuntu:24.04
+            cc: gcc-14          # 24.04's default GCC is 13; std::println needs 14
+            cxx: g++-14
+          - distro: ubuntu26.04
+            image: ubuntu:26.04
+            cc: gcc
+            cxx: g++
+          - distro: debian13
+            image: debian:13
+            cc: gcc
+            cxx: g++
+    container: ${{ matrix.image }}
     steps:
+      - name: Packages
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git cmake ninja-build pkg-config \
+            ${{ matrix.cc }} ${{ matrix.cxx }} libfontconfig-dev libdbus-1-dev libwayland-dev libxkbcommon-dev \
+            libgl-dev libjsoncpp-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            dpkg-dev file binutils
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
@@ -200,34 +228,33 @@ jobs:
           repository: KhronosGroup/Vulkan-Headers
           ref: ${{ env.VULKAN_HEADERS_REF }}
           path: vulkan-headers
-      - name: Packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config g++-14 \
-            libfontconfig-dev libdbus-1-dev libwayland-dev libxkbcommon-dev libgl-dev libjsoncpp-dev \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev dpkg-dev file
-      # GCC 14 for std::println; Ubuntu 24.04's GLFW is 3.3, so the bundled one. /usr: the paths the
-      # runtime and its manifest name are fixed here, and the package installs there.
+      # GLFW bundled: 3.4 is needed and not every one of these has it. /usr: the paths the runtime and its
+      # manifest name are fixed here, and the package installs there.
       - name: Build
         env:
-          CC: gcc-14
-          CXX: g++-14
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
         run: |
           cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr \
             -DOPENXR_SIM_BUNDLED_GLFW=ON \
             -DOPENXR_SIM_OPENXR_INCLUDE=$PWD/openxr-sdk/include -DOPENXR_SIM_VULKAN_INCLUDE=$PWD/vulkan-headers/include
           cmake --build build
+      # The Debian revision names the distribution: 0.8.1-1~debian13. "~" sorts before anything, so a
+      # distribution's own later packaging of the same version would win.
       - name: Package
         run: |
-          (cd build && cpack)
+          (cd build && cpack -D CPACK_DEBIAN_PACKAGE_RELEASE=1~${{ matrix.distro }})
           mkdir -p dist && mv build/*.deb dist/
           (cd dist && sha256sum *.deb > "$(ls *.deb).sha256")
           dpkg-deb -I dist/*.deb
           dpkg-deb -c dist/*.deb
-      # The INSTALLED copy, as a user gets it: apt resolves what dpkg-shlibdeps named.
+      # The INSTALLED copy, as a user gets it: apt resolves what dpkg-shlibdeps named. A font, as any desktop
+      # has; the container has none.
       - name: Install and check
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get install -y ./dist/*.deb
+          apt-get install -y ./dist/*.deb fonts-dejavu-core
           lib=/usr/lib/x86_64-linux-gnu/openxr-sim/libopenxr_sim.so
           test -f "$lib"
           nm -D --defined-only "$lib" | grep -q ' xrNegotiateLoaderRuntimeInterface$'
@@ -238,7 +265,7 @@ jobs:
           openxr-sim --layout-check
       - uses: actions/upload-artifact@v4
         with:
-          name: openxr-sim-linux-amd64-deb
+          name: openxr-sim-linux-${{ matrix.distro }}
           path: dist
 
   release:
@@ -265,14 +292,28 @@ jobs:
           "Make this the active runtime"; Windows asks an administrator to allow installing it in Program Files.
           Settings > Apps removes it again, and "Go back to ..." restores the runtime it replaced.
 
-          **Linux** (built on Ubuntu 24.04; for it and newer): \`sudo apt install ./openxr-sim_${version}_amd64.deb\`, then
-          run openxr-sim and choose "Make this the active runtime" (for you alone; no rights asked). Elsewhere,
-          build from source (README.md, "Building").
+          **Linux**: the .deb for your system --
+
+          | | |
+          |---|---|
+          | Ubuntu 24.04 | \`openxr-sim_$version-1~ubuntu24.04_amd64.deb\` |
+          | Ubuntu 26.04 | \`openxr-sim_$version-1~ubuntu26.04_amd64.deb\` |
+          | Debian 13 | \`openxr-sim_$version-1~debian13_amd64.deb\` |
+
+          \`sudo apt install ./<that file>\`, then run openxr-sim and choose "Make this the active runtime" (for
+          you alone; no rights asked). Elsewhere, build from source (README.md, "Building").
+
           EOF
-          # A release already there (a re-run, or one made by hand) has its files replaced; else it is made.
+          gh api "repos/$REPO/releases/generate-notes" -f tag_name="$TAG" --jq .body >> notes.md
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # Already there (a re-run, or made before this job's files were these): its files and notes
+            # become this run's, and a download this run did not make is taken off.
+            for a in $(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name'); do
+              [ -e "dist/$a" ] || gh release delete-asset "$TAG" "$a" --repo "$REPO" --yes
+            done
             gh release upload "$TAG" dist/* --repo "$REPO" --clobber
+            gh release edit "$TAG" --repo "$REPO" --notes-file notes.md
           else
             gh release create "$TAG" dist/* --repo "$REPO" --verify-tag --title "openxr-sim $version" \
-              --notes-file notes.md --generate-notes
+              --notes-file notes.md
           fi

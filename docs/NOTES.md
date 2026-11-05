@@ -473,10 +473,26 @@ tag's release: the Windows .exe (built and tested on the runner, previous sectio
 * **Depends**: dpkg-shlibdeps for what is linked; GLFW `dlopen`s Wayland's cursor and EGL libraries and
   xkbcommon, which it cannot see, so those are named; X11's and libdecor are Recommends (a Wayland
   desktop needs no X11), as is the OpenXR loader (applications need it, the runtime does not).
-* **Built on Ubuntu 24.04**, so for it and newer: GCC 14 for `std::println`, and GLFW bundled, since its
-  GLFW is 3.3. The desktop entry moved here from LOS's recipe (`packaging/openxr-sim.desktop`).
+* **One .deb per distribution, not one for all**: the first, built on Ubuntu 24.04, installed there and
+  nowhere newer -- Debian 13 and Ubuntu 26.04 have jsoncpp as libjsoncpp26, 24.04 as libjsoncpp25, and
+  apt refused it ("libjsoncpp25 ... is not installable"; found in VMs, below). Ubuntu ships no static
+  jsoncpp to sidestep it with. So each is built in its own distribution's container, against its own
+  libraries, as `<version>-1~<distro>` (`~` sorts first, so a distribution's own packaging would win).
+  GCC 14 or newer for `std::println` (24.04's default is 13); GLFW bundled, as 3.4 is not everywhere.
+  The desktop entry moved here from LOS's recipe (`packaging/openxr-sim.desktop`).
 * **Checked as installed**: `apt install` of the .deb on the runner, then the runtime's export, the
   manifest naming it, one frame (`--screenshot`) and `--layout-check`. Not the end-to-end test: Ubuntu's
   OpenXR loader is older than the headers the client is built with.
 * **v0.8.0's release was made before the .deb existed** and has only the .exe; its tree has no CPack rules.
+
+**In VMs** (2026-11-05): each distribution's official cloud image under QEMU, driven by cloud-init with no
+login -- a NoCloud seed runs one script, which writes its results to a data disk and the serial log and
+powers off (LOS's `.builds/vm/work/distro-test/`). It downloads the .deb from the GitHub release, checks
+its SHA-256, `apt install`s it, then as an ordinary user `openxr-sim --register-runtime`, builds
+`tests/sim_client.c` against the distribution's own OpenXR loader, and runs Vulkan, OpenGL (EGL,
+surfaceless), both with every layer type, and hands, on lavapipe and llvmpipe through that loader with no
+XR_RUNTIME_JSON, checking the eyes' pixels; then one frame, `--layout-check`, `--unregister-runtime`, and
+`apt remove`. The loaders: Ubuntu 24.04's is 1.0.20, Debian 13's and Ubuntu 26.04's 1.1.47.
+* 0.8.1's single .deb (built on 24.04): Ubuntu 24.04 passed all of it; Debian 13 and Ubuntu 26.04 could
+  not install it (libjsoncpp25), which is what made the per-distribution packages.
 

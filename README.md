@@ -23,9 +23,9 @@ It began as LOS's runtime (`apps/los-openxr`) and is its own project since 0.7.0
 ## Installing
 
 Each [release](https://github.com/helpsl/openxr-sim/releases) has `openxr-sim-<version>-windows-x64.exe` (the
-runtime is inside it) and, for Ubuntu 24.04 and newer, `openxr-sim_<version>_amd64.deb`:
+runtime is inside it) and a .deb for each of Ubuntu 24.04, Ubuntu 26.04 and Debian 13, named for it:
 
-    sudo apt install ./openxr-sim_<version>_amd64.deb
+    sudo apt install ./openxr-sim_<version>-1~ubuntu24.04_amd64.deb   # or ~ubuntu26.04, ~debian13
 
 Then run `openxr-sim` and choose "Make this the active runtime" (below).
 
