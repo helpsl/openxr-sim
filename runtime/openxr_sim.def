@@ -1,0 +1,6 @@
+; The runtime's one export on Windows. In a .def file, not __declspec(dllexport) on the definition:
+; openxr_loader_negotiation.h has already declared it without, which MSVC calls a redefinition (C2375);
+; and the linker matches this undecorated name to x86's _xrNegotiateLoaderRuntimeInterface@8 by itself.
+LIBRARY openxr_sim
+EXPORTS
+    xrNegotiateLoaderRuntimeInterface

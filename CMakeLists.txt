@@ -28,7 +28,7 @@ option(OPENXR_SIM_INSTALL_ACTIVE_RUNTIME "install active_runtime.json naming thi
 
 if(MSVC)
     set(OXS_WARNINGS /W4 /wd4100 /wd4201 /wd4204 /wd4221)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES)
 else()
     set(OXS_WARNINGS -Wall -Wextra)
 endif()
@@ -37,7 +37,7 @@ endif()
 # The runtime links neither loader: the OpenXR loader opens the runtime, and Vulkan's and GL's functions
 # are looked up at run time in whatever the application has loaded.
 find_package(PkgConfig)
-if(PKG_CONFIG_FOUND)
+if(PKG_CONFIG_FOUND AND NOT WIN32)
     pkg_check_modules(OPENXR openxr)
     pkg_check_modules(VULKAN vulkan)
 endif()
@@ -51,7 +51,7 @@ endif()
 set(OXS_RUNTIME_SOURCES runtime/runtime.c runtime/session.c runtime/hand.c runtime/swapchain.c runtime/swapchain_vk.c
     runtime/swapchain_gl.c runtime/input.c runtime/device_null.c runtime/device_sim.c)
 if(WIN32)
-    list(APPEND OXS_RUNTIME_SOURCES runtime/plat_win32.c)
+    list(APPEND OXS_RUNTIME_SOURCES runtime/plat_win32.c runtime/openxr_sim.def)
 else()
     list(APPEND OXS_RUNTIME_SOURCES runtime/plat_posix.c)
 endif()

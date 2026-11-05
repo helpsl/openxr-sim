@@ -45,10 +45,14 @@ bool Fonts::load(std::string* error) {
     for (int f = 0; f < kFaces; f++) {
         const FontFile ff = find_font(static_cast<Face>(f));
         const std::string& path = ff.path;
-        if (path.empty()) continue;
-        std::ifstream in(path, std::ios::binary);
+        if (path.empty() && ff.data.empty()) continue;
         auto face = std::make_unique<Face_>();
-        face->file.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        if (!ff.data.empty()) {
+            face->file.assign(ff.data.begin(), ff.data.end());
+        } else {
+            std::ifstream in(path, std::ios::binary);
+            face->file.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
         const int offset = face->file.empty() ? -1 : stbtt_GetFontOffsetForIndex(face->file.data(), 0);
         if (offset < 0 || !stbtt_InitFont(&face->info, face->file.data(), offset)) {
             std::fprintf(stderr, "openxr-sim: %s is not a font stb_truetype reads\n", path.c_str());

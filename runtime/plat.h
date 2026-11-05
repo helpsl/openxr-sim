@@ -19,7 +19,7 @@
 #include <stdio.h>
 
 #ifdef _WIN32
-#define OXS_EXPORT __declspec(dllexport)
+#define OXS_EXPORT   // exported by runtime/openxr_sim.def
 #define OXS_PRINTF(f, a)
 #define strdup _strdup
 #else

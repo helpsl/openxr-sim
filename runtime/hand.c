@@ -278,13 +278,14 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_LocateHandJointsEXT(XrHandTrackerEXT t
         return XR_SUCCESS;
     }
 
-    const struct oxs_hand hand = session_tracking(s).hand[t->hand];
+    const struct oxs_tracking tracking = session_tracking(s);
+    const struct oxs_hand hand = tracking.hand[t->hand];
     const bool thumb_down = (hand.buttons & (OXS_BUTTON_PRIMARY | OXS_BUTTON_SECONDARY | OXS_BUTTON_STICK)) != 0 ||
                             fabsf(hand.stick[0]) > 0.1f || fabsf(hand.stick[1]) > 0.1f;
     const float curl[4] = { clamp01(hand.trigger), clamp01(hand.squeeze), clamp01(hand.squeeze), clamp01(hand.squeeze) };
     struct oxs_pose j[XR_HAND_JOINT_COUNT_EXT];
     float radius[XR_HAND_JOINT_COUNT_EXT];
-    skeleton(curl, thumb_down ? 1 : 0, j, radius);
+    skeleton(curl, thumb_down ? 1.0f : 0.0f, j, radius);
 
     const struct oxs_pose palm = palm_on_grip();
     for (uint32_t i = 0; i < XR_HAND_JOINT_COUNT_EXT; i++) {

@@ -572,15 +572,19 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_StructureTypeToString(XrInstance insta
     if (find(H(instance), MAGIC_INSTANCE) == NULL) return XR_ERROR_HANDLE_INVALID;
 // A handful of names are longer than the 64 bytes OpenXR gives this buffer; they are cut, as the
 // specification's own buffer size cuts them.
+#ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
 #define CASE(name, val) case name: snprintf(buffer, XR_MAX_STRUCTURE_NAME_SIZE, "%s", #name); return XR_SUCCESS;
     switch (value) {
         XR_LIST_ENUM_XrStructureType(CASE)
         default: break;
     }
 #undef CASE
+#ifdef __GNUC__
 #pragma GCC diagnostic pop
+#endif
     snprintf(buffer, XR_MAX_STRUCTURE_NAME_SIZE, "XR_UNKNOWN_STRUCTURE_TYPE_%d", (int)value);
     return XR_SUCCESS;
 }

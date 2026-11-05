@@ -1,5 +1,5 @@
 # THE PROBE: what an application sees, through the real loader.
-if(PKG_CONFIG_FOUND)
+if(PKG_CONFIG_FOUND AND NOT WIN32)
     pkg_check_modules(OPENXR_LOADER openxr)
     pkg_check_modules(VULKAN_LOADER vulkan)
     pkg_check_modules(EGL egl)
@@ -10,8 +10,15 @@ if(OpenXR_FOUND)
 else()
     set(OXS_LOADER ${OPENXR_LOADER_LINK_LIBRARIES})
 endif()
+# THE END-TO-END TEST's client on Windows needs no loader: it opens the runtime itself (sim_client.c, "ON
+# WINDOWS"), so it is built whether or not an OpenXR SDK is found -- and Vulkan comes from vulkan-1.dll at run
+# time, so no Vulkan SDK either.
+if(WIN32)
+    add_executable(openxr-sim-client sim_client.c)
+    target_include_directories(openxr-sim-client PRIVATE ${OPENXR_SIM_OPENXR_INCLUDE} ${OPENXR_SIM_VULKAN_INCLUDE})
+endif()
 if(NOT OXS_LOADER)
-    message(STATUS "openxr-sim: no OpenXR loader found; the probe and the test client are not built")
+    message(STATUS "openxr-sim: no OpenXR loader found; the probe is not built")
     return()
 endif()
 add_executable(openxr-sim-probe probe.c)

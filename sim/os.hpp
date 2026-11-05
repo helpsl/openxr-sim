@@ -9,14 +9,17 @@
 #include "font.hpp"
 
 #include <string>
+#include <vector>
 
 namespace oxs {
 
 // The file of a face: fontconfig's match for sans-serif, sans-serif:bold and monospace on Linux; Segoe UI,
 // Segoe UI Semibold and Consolas on Windows. Empty when there is none. `embolden`: the file has no bold of
 // its own that stb_truetype can draw -- the match is a variable font's named instance, whose default
-// instance is all stb_truetype reads -- so its regular glyphs are to be made heavier.
-struct FontFile { std::string path; bool embolden = false; };
+// instance is all stb_truetype reads -- so its regular glyphs are to be made heavier. `data`: the font
+// itself, when it was had from the system rather than from a file (Windows: GDI's GetFontData, which
+// answers for whatever font Windows -- or Wine -- chose for the name), and `path` then only names it.
+struct FontFile { std::string path; bool embolden = false; std::vector<unsigned char> data; };
 FontFile find_font(Face face);
 // Where find_font looked, for the error when it found nothing.
 std::string font_search_description();

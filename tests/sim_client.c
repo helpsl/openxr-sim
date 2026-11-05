@@ -25,20 +25,118 @@
 // be hands: the right pinch's value is the scripted trigger and its ready_ext true, and each hand's pinch
 // and poke poses located against the grip (and, with --hands, against the open left hand's joints). Without
 // it, the extension's profile and paths are refused.
+//
+// ON WINDOWS (2026-11-05): Vulkan only, and with NO LOADER -- the client opens openxr_sim.dll itself
+// (OPENXR_SIM_RUNTIME, else the one beside it), negotiates with it as the loader would, and takes every
+// OpenXR function from it, and every Vulkan one from vulkan-1.dll. What is tested is the runtime and the
+// simulator, which is all a loader would have handed over to.
 #define XR_USE_GRAPHICS_API_VULKAN
 #define XR_USE_GRAPHICS_API_OPENGL
+#ifdef _WIN32
+#define OXS_DIRECT 1
+#define XR_NO_PROTOTYPES
+#define VK_NO_PROTOTYPES
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
+#include <windows.h>
+#include <vulkan/vulkan.h>
+#include <openxr/openxr.h>
+#include <openxr/openxr_platform.h>
+#include <openxr/openxr_loader_negotiation.h>
+// XR_MNDX_egl_enable's binding, mirrored: there is no EGL here, and --gl is refused.
+typedef struct { XrStructureType type; const void *next; void *getProcAddress, *display, *config, *context; } XrGraphicsBindingEGLMNDX;
+#define XR_MNDX_EGL_ENABLE_EXTENSION_NAME "XR_MNDX_egl_enable"
+#else
 #define XR_USE_PLATFORM_EGL
 #include <vulkan/vulkan.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#endif
 
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef OXS_DIRECT
+#define XR_FUNCTIONS(X) X(xrAcquireSwapchainImage) X(xrAttachSessionActionSets) X(xrBeginFrame) X(xrBeginSession) \
+    X(xrCreateAction) X(xrCreateActionSet) X(xrCreateActionSpace) X(xrCreateInstance) X(xrCreateReferenceSpace) \
+    X(xrCreateSession) X(xrCreateSwapchain) X(xrDestroyInstance) X(xrDestroySession) X(xrDestroySwapchain) X(xrEndFrame) \
+    X(xrEndSession) X(xrEnumerateSwapchainImages) X(xrGetActionStateBoolean) X(xrGetActionStateFloat) \
+    X(xrGetCurrentInteractionProfile) X(xrGetSystem) X(xrGetSystemProperties) X(xrLocateSpace) X(xrLocateViews) \
+    X(xrPathToString) X(xrPollEvent) X(xrReleaseSwapchainImage) X(xrRequestExitSession) X(xrStringToPath) \
+    X(xrSuggestInteractionProfileBindings) X(xrSyncActions) X(xrWaitFrame) X(xrWaitSwapchainImage)
+#define VK_FUNCTIONS(X) X(vkAllocateCommandBuffers) X(vkAllocateMemory) X(vkBeginCommandBuffer) X(vkBindBufferMemory) \
+    X(vkCmdClearColorImage) X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) X(vkCreateBuffer) X(vkCreateCommandPool) \
+    X(vkCreateFence) X(vkDestroyBuffer) X(vkDestroyCommandPool) X(vkDestroyDevice) X(vkDestroyFence) X(vkDestroyInstance) \
+    X(vkDeviceWaitIdle) X(vkEndCommandBuffer) X(vkFreeMemory) X(vkGetBufferMemoryRequirements) X(vkGetDeviceQueue) \
+    X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceQueueFamilyProperties) \
+    X(vkMapMemory) X(vkQueueSubmit) X(vkResetCommandBuffer) X(vkResetFences) X(vkWaitForFences)
+#define DECLARE(name) static PFN_##name name;
+static PFN_xrGetInstanceProcAddr xrGetInstanceProcAddr;
+static PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
+XR_FUNCTIONS(DECLARE)
+VK_FUNCTIONS(DECLARE)
+#undef DECLARE
+
+// THE RUNTIME, as the loader would open it: its one export, xrNegotiateLoaderRuntimeInterface, gives
+// xrGetInstanceProcAddr, and that gives everything else -- the three global functions before there is an
+// instance, the rest once there is (direct_instance_functions).
+static int direct_open(void)
+{
+    wchar_t path[MAX_PATH];
+    const wchar_t *env = _wgetenv(L"OPENXR_SIM_RUNTIME");
+    if (env != NULL && env[0] != L'\0') wcsncpy_s(path, MAX_PATH, env, _TRUNCATE);
+    else {
+        GetModuleFileNameW(NULL, path, MAX_PATH);
+        wchar_t *slash = wcsrchr(path, L'\\');
+        wcscpy_s(slash != NULL ? slash + 1 : path, MAX_PATH - (slash != NULL ? (size_t)(slash + 1 - path) : 0), L"openxr_sim.dll");
+    }
+    HMODULE rt = LoadLibraryW(path);
+    if (rt == NULL) { printf("  could not load %ls (error %lu)\n", path, GetLastError()); return 1; }
+    PFN_xrNegotiateLoaderRuntimeInterface negotiate =
+        (PFN_xrNegotiateLoaderRuntimeInterface)(void *)GetProcAddress(rt, "xrNegotiateLoaderRuntimeInterface");
+    if (negotiate == NULL) { printf("  %ls exports no xrNegotiateLoaderRuntimeInterface\n", path); return 1; }
+    XrNegotiateLoaderInfo li = { .structType = XR_LOADER_INTERFACE_STRUCT_LOADER_INFO, .structVersion = XR_LOADER_INFO_STRUCT_VERSION,
+        .structSize = sizeof li, .minInterfaceVersion = 1, .maxInterfaceVersion = XR_CURRENT_LOADER_RUNTIME_VERSION,
+        .minApiVersion = XR_MAKE_VERSION(1, 0, 0), .maxApiVersion = XR_MAKE_VERSION(1, 0x3ff, 0xfff) };
+    XrNegotiateRuntimeRequest rq = { .structType = XR_LOADER_INTERFACE_STRUCT_RUNTIME_REQUEST,
+        .structVersion = XR_RUNTIME_INFO_STRUCT_VERSION, .structSize = sizeof rq };
+    XrResult r = negotiate(&li, &rq);
+    if (XR_FAILED(r) || rq.getInstanceProcAddr == NULL) { printf("  negotiation failed: %d\n", r); return 1; }
+    xrGetInstanceProcAddr = rq.getInstanceProcAddr;
+    xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrCreateInstance", (PFN_xrVoidFunction *)&xrCreateInstance);
+    if (xrCreateInstance == NULL) { printf("  the runtime gives no xrCreateInstance\n"); return 1; }
+    HMODULE vk = LoadLibraryW(L"vulkan-1.dll");
+    if (vk != NULL) vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)(void *)GetProcAddress(vk, "vkGetInstanceProcAddr");
+    return 0;
+}
+
+static int direct_instance_functions(XrInstance instance)
+{
+    int missing = 0;
+#define LOAD(name) if (XR_FAILED(xrGetInstanceProcAddr(instance, #name, (PFN_xrVoidFunction *)&name))) { printf("  no %s\n", #name); missing++; }
+    XR_FUNCTIONS(LOAD)
+#undef LOAD
+    return missing;
+}
+
+static int direct_vulkan_functions(VkInstance instance)
+{
+    int missing = 0;
+#define LOAD(name) if ((name = (PFN_##name)vkGetInstanceProcAddr(instance, #name)) == NULL) { printf("  no %s\n", #name); missing++; }
+    VK_FUNCTIONS(LOAD)
+#undef LOAD
+    return missing;
+}
+#endif
 
 #define EYE 256
 #define SQUARE 64
@@ -99,6 +197,11 @@ static void draw_gl(GLuint_ texture, int height, float r, float g, float b, floa
 
 static int setup_gl(XrSystemId sys, XrGraphicsBindingEGLMNDX *binding)
 {
+#ifdef OXS_DIRECT
+    (void)sys; (void)binding;
+    printf("  --gl needs EGL, which Windows has not\n");
+    return 1;
+#else
     PFN_xrGetOpenGLGraphicsRequirementsKHR reqs;
     XR(xrGetInstanceProcAddr(in, "xrGetOpenGLGraphicsRequirementsKHR", (PFN_xrVoidFunction *)&reqs));
     XrGraphicsRequirementsOpenGLKHR gr = { .type = XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR };
@@ -123,6 +226,7 @@ static int setup_gl(XrSystemId sys, XrGraphicsBindingEGLMNDX *binding)
     *binding = (XrGraphicsBindingEGLMNDX){ .type = XR_TYPE_GRAPHICS_BINDING_EGL_MNDX, .getProcAddress = eglGetProcAddress,
         .display = d, .config = cfg, .context = c };
     return 0;
+#endif
 }
 
 static VkDevice dev;
@@ -212,7 +316,13 @@ int main(int argc, char **argv)
              win32 ? "sim-test-win32" : gl ? "sim-test-gl" : "sim-test", layers ? "-layers" : "", hands ? "-hands" : "",
              hand_interaction ? "-interaction" : "");
     ci.applicationInfo.apiVersion = XR_API_VERSION_1_0;
+#ifdef OXS_DIRECT
+    if (direct_open() != 0) return 1;
+#endif
     XR(xrCreateInstance(&ci, &in));
+#ifdef OXS_DIRECT
+    if (direct_instance_functions(in) != 0) return 1;
+#endif
     XrSystemGetInfo gi = { .type = XR_TYPE_SYSTEM_GET_INFO, .formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY };
     XrSystemId sys = XR_NULL_SYSTEM_ID;
     XrResult r = xrGetSystem(in, &gi, &sys);
@@ -261,6 +371,9 @@ int main(int argc, char **argv)
         VkResult vr = VK_SUCCESS;
         XR(mk_instance(in, &xvi, &vk, &vr));
         VK(vr);
+#ifdef OXS_DIRECT
+        if (direct_vulkan_functions(vk) != 0) return 1;
+#endif
         XrVulkanGraphicsDeviceGetInfoKHR dgi = { .type = XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR, .systemId = sys, .vulkanInstance = vk };
         VkPhysicalDevice phys = VK_NULL_HANDLE;
         XR(get_device(in, &dgi, &phys));

@@ -194,7 +194,7 @@ std::string App::command(const std::string& line) {
         uint32_t controls = 0;
         for (size_t i = 2; i < w.size(); i++) {
             std::string name = w[i];
-            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             const auto it = std::find_if(std::begin(kControls), std::end(kControls), [&](const Named& n) { return name == n.name; });
             if (it == std::end(kControls)) return fail("no control called " + w[i]);
             controls |= it->control;

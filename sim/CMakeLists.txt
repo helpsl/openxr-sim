@@ -20,10 +20,10 @@ find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(openxr-sim main.cpp app.cpp commands.cpp control.cpp link.cpp rig.cpp canvas.cpp font.cpp ui.cpp window.cpp
-    third_party_impl.c "${PROJECT_SOURCE_DIR}/common/composite.c")
+    clay_impl.cpp third_party_impl.c "${PROJECT_SOURCE_DIR}/common/composite.c")
 if(WIN32)
-    target_sources(openxr-sim PRIVATE os_win32.cpp)
-    target_link_libraries(openxr-sim PRIVATE ws2_32 bcrypt shell32 ole32)
+    target_sources(openxr-sim PRIVATE os_win32.cpp openxr-sim.manifest)
+    target_link_libraries(openxr-sim PRIVATE ws2_32 bcrypt shell32 ole32 gdi32 advapi32)
     # A windowed program: no console of its own when the runtime starts it.
     set_target_properties(openxr-sim PROPERTIES WIN32_EXECUTABLE ON)
     if(MSVC)
@@ -46,6 +46,6 @@ if(MSVC)
 else()
     target_compile_options(openxr-sim PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra>)
     # The vendored C headers are not ours to warn about.
-    set_source_files_properties(third_party_impl.c PROPERTIES COMPILE_OPTIONS "-w")
+    set_source_files_properties(third_party_impl.c clay_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 install(TARGETS openxr-sim RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

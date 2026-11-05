@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The openxr-sim authors
 //
-// THE HEADER-ONLY LIBRARIES' ONE DEFINITION each, compiled as C: Clay, stb_truetype, stb_image_write.
-#define CLAY_IMPLEMENTATION
-#include "clay.h"
+// THE HEADER-ONLY LIBRARIES' ONE DEFINITION each, compiled as C: stb_truetype, stb_image_write. Clay's is
+// in clay_impl.cpp.
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"

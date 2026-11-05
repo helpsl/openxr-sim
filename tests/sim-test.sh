@@ -3,6 +3,10 @@
 #
 #   tests/sim-test.sh [BUILD_DIR] [OUT_DIR]
 #
+# A WINDOWS BUILD (BUILD_DIR holding openxr-sim-client.exe) is run under Wine in WINEPREFIX (default
+# los-wine's), with no display: the client opens the runtime itself rather than through a loader
+# (sim_client.c, "ON WINDOWS"), Vulkan only -- the OpenGL runs need EGL and are left out.
+#
 # An OpenXR application (sim_client.c) runs a Vulkan session on lavapipe through the real loader, against
 # the runtime in BUILD_DIR (test_runtime.json), and then again in desktop OpenGL on an EGL surfaceless
 # context (llvmpipe), whose readback comes back bottom to top; the runtime starts openxr-sim from BUILD_DIR, which
@@ -28,6 +32,11 @@ out="$(cd "$out" && pwd)"
 icd=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
 [ -f "$icd" ] || { echo "no lavapipe ($icd)"; exit 2; }
 rc=0
+wine=""
+if [ -f "$build/openxr-sim-client.exe" ]; then
+    wine=yes
+    export WINEPREFIX="${WINEPREFIX:-$HOME/.local/share/los-wine/prefix}"
+fi
 
 # A PIXEL OF A PPM: its R G B, decimal.
 pixel() {   # file x y
@@ -57,10 +66,19 @@ run() {   # api [client arguments]
     rm -f "${dir:?}"/left.ppm "${dir:?}"/right.ppm "${dir:?}"/window.png "${dir:?}"/summary
     echo "== $1"
     echo "the application:"
+    if [ -n "$wine" ]; then
+        # The simulator and the runtime are the ones beside the client (plat_win32.c); the folder is Wine's
+        # name for it. No display: nothing here needs one, and a program with windows replaces the
+        # prefix's display-less server (los-wine).
+        env -u DISPLAY -u WAYLAND_DISPLAY WINEDEBUG=-all OPENXR_SIM_DEVICE=sim \
+            OPENXR_SIM_HEADLESS="Z:${dir//\//\\}" VK_ICD_FILENAMES="$icd" VK_DRIVER_FILES="$icd" \
+            timeout -k 5 60 wine "Z:${build//\//\\}\\openxr-sim-client.exe" ${2:-} < /dev/null || rc=1
+    else
     XR_RUNTIME_JSON="$build/test_runtime.json" OPENXR_SIM_DEVICE=sim OPENXR_SIM_EXE="$build/openxr-sim" \
         OPENXR_SIM_HEADLESS="$dir" VK_ICD_FILENAMES="$icd" VK_DRIVER_FILES="$icd" \
         EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 \
         timeout 60 "$build/openxr-sim-client" ${2:-} || rc=1   # unquoted: one or more arguments
+    fi
     # The simulator outlives the session by as long as it takes to write; its summary is written last.
     for _ in $(seq 100); do [ -f "$dir/summary" ] && break; sleep 0.1; done
     echo "the simulator:"
@@ -99,12 +117,16 @@ layers() {   # dir
     expect_near "quad B: half white over green"   "$d/right.ppm" 70 192 "188 255 188"
 }
 run vulkan
-run gl --gl
-run win32 --gl-win32
+if [ -z "$wine" ]; then
+    run gl --gl
+    run win32 --gl-win32
+fi
 run vulkan-layers --layers
 layers vulkan-layers
-run gl-layers "--gl --layers"
-layers gl-layers
+if [ -z "$wine" ]; then
+    run gl-layers "--gl --layers"
+    layers gl-layers
+fi
 run hands --hands
 run hand-interaction "--hand-interaction --hands"
 exit $rc
