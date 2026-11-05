@@ -51,7 +51,7 @@ endif()
 set(OXS_RUNTIME_SOURCES runtime/runtime.c runtime/session.c runtime/hand.c runtime/swapchain.c runtime/swapchain_vk.c
     runtime/swapchain_gl.c runtime/input.c runtime/device_null.c runtime/device_sim.c)
 if(WIN32)
-    list(APPEND OXS_RUNTIME_SOURCES runtime/plat_win32.c runtime/openxr_sim.def)
+    list(APPEND OXS_RUNTIME_SOURCES runtime/plat_win32.c runtime/swapchain_d3d11.c runtime/swapchain_d3d12.c runtime/openxr_sim.def)
 else()
     list(APPEND OXS_RUNTIME_SOURCES runtime/plat_posix.c)
 endif()
@@ -64,6 +64,9 @@ target_compile_options(openxr_sim PRIVATE ${OXS_WARNINGS})
 if(WIN32)
     set(OXS_LIBDIR "${CMAKE_INSTALL_BINDIR}")
     set_target_properties(openxr_sim PROPERTIES PREFIX "")
+    # dxguid: the interface IDs, a static library -- d3d11.dll, d3d12.dll and dxgi.dll are looked up at run
+    # time, as Vulkan's and GL's are, and loaded only by an application that uses them.
+    target_link_libraries(openxr_sim PRIVATE dxguid)
     install(TARGETS openxr_sim LIBRARY DESTINATION "${OXS_LIBDIR}")
 else()
     set(OXS_LIBDIR "${CMAKE_INSTALL_LIBDIR}/openxr-sim")

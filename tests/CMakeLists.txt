@@ -16,6 +16,8 @@ endif()
 if(WIN32)
     add_executable(openxr-sim-client sim_client.c)
     target_include_directories(openxr-sim-client PRIVATE ${OPENXR_SIM_OPENXR_INCLUDE} ${OPENXR_SIM_VULKAN_INCLUDE})
+    # --d3d11 and --d3d12: Direct3D is part of Windows, so these are linked, not looked up.
+    target_link_libraries(openxr-sim-client PRIVATE d3d11 d3d12 dxgi dxguid)
 endif()
 if(NOT OXS_LOADER)
     message(STATUS "openxr-sim: no OpenXR loader found; the probe is not built")

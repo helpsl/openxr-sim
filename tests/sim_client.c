@@ -26,7 +26,10 @@
 // and poke poses located against the grip (and, with --hands, against the open left hand's joints). Without
 // it, the extension's profile and paths are refused.
 //
-// ON WINDOWS (2026-11-05): Vulkan only, and with NO LOADER -- the client opens openxr_sim.dll itself
+// --d3d11, --d3d12 (Windows): the same eyes drawn in Direct3D -- cleared, and the blue square put in by
+// UpdateSubresource (11) or a clear of its rectangle (12) -- on the adapter the runtime names.
+//
+// ON WINDOWS (2026-11-05): Vulkan or Direct3D, and with NO LOADER -- the client opens openxr_sim.dll itself
 // (OPENXR_SIM_RUNTIME, else the one beside it), negotiates with it as the loader would, and takes every
 // OpenXR function from it, and every Vulkan one from vulkan-1.dll. What is tested is the runtime and the
 // simulator, which is all a loader would have handed over to.
@@ -42,7 +45,15 @@
 #ifndef _USE_MATH_DEFINES
 #define _USE_MATH_DEFINES
 #endif
+#ifndef COBJMACROS
+#define COBJMACROS
+#endif
+#define XR_USE_GRAPHICS_API_D3D11
+#define XR_USE_GRAPHICS_API_D3D12
 #include <windows.h>
+#include <d3d11.h>
+#include <d3d12.h>
+#include <dxgi1_2.h>
 #include <vulkan/vulkan.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
@@ -154,6 +165,7 @@ static XrInstance in;
 static XrPath path(const char *s) { XrPath p = XR_NULL_PATH; xrStringToPath(in, s, &p); return p; }
 
 static bool gl, win32, layers, hands, hand_interaction;
+static int d3d;   // 11 or 12 with --d3d11, --d3d12; else 0
 
 // XrGraphicsBindingOpenGLWin32KHR, mirrored: openxr_platform.h declares it only with windows.h.
 struct binding_win32 { XrStructureType type; const void *next; void *hDC, *hGLRC; };
@@ -229,6 +241,123 @@ static int setup_gl(XrSystemId sys, XrGraphicsBindingEGLMNDX *binding)
 #endif
 }
 
+#ifdef OXS_DIRECT
+// ---- DIRECT3D ------------------------------------------------------------------------------------------
+static ID3D11Device *d11;
+static ID3D11DeviceContext *d11c;
+static ID3D12Device *d12;
+static ID3D12CommandQueue *d12q;
+static ID3D12CommandAllocator *d12a;
+static ID3D12GraphicsCommandList *d12l;
+static ID3D12Fence *d12f;
+static UINT64 d12v;
+static HANDLE d12e;
+static ID3D12DescriptorHeap *d12h;
+#define HR(call) do { HRESULT h_ = (call); if (FAILED(h_)) { printf("  %s: 0x%08lx\n", #call, (unsigned long)h_); return 1; } } while (0)
+
+// The adapter the runtime asked for, by its LUID.
+static IDXGIAdapter1 *adapter_of(LUID luid)
+{
+    IDXGIFactory1 *f = NULL;
+    if (FAILED(CreateDXGIFactory1(&IID_IDXGIFactory1, (void **)&f))) return NULL;
+    IDXGIAdapter1 *a = NULL;
+    for (UINT i = 0; IDXGIFactory1_EnumAdapters1(f, i, &a) == S_OK; i++) {
+        DXGI_ADAPTER_DESC1 d;
+        IDXGIAdapter1_GetDesc1(a, &d);
+        if (d.AdapterLuid.LowPart == luid.LowPart && d.AdapterLuid.HighPart == luid.HighPart) {
+            printf("  Direct3D adapter: %ls\n", d.Description);
+            break;
+        }
+        IDXGIAdapter1_Release(a);
+        a = NULL;
+    }
+    IDXGIFactory1_Release(f);
+    return a;
+}
+
+static int setup_d3d(XrSystemId sys, XrGraphicsBindingD3D11KHR *b11, XrGraphicsBindingD3D12KHR *b12)
+{
+    LUID luid;
+    D3D_FEATURE_LEVEL level;
+    if (d3d == 11) {
+        PFN_xrGetD3D11GraphicsRequirementsKHR reqs;
+        XR(xrGetInstanceProcAddr(in, "xrGetD3D11GraphicsRequirementsKHR", (PFN_xrVoidFunction *)&reqs));
+        XrGraphicsRequirementsD3D11KHR gr = { .type = XR_TYPE_GRAPHICS_REQUIREMENTS_D3D11_KHR };
+        XR(reqs(in, sys, &gr));
+        luid = gr.adapterLuid;
+        level = gr.minFeatureLevel;
+    } else {
+        PFN_xrGetD3D12GraphicsRequirementsKHR reqs;
+        XR(xrGetInstanceProcAddr(in, "xrGetD3D12GraphicsRequirementsKHR", (PFN_xrVoidFunction *)&reqs));
+        XrGraphicsRequirementsD3D12KHR gr = { .type = XR_TYPE_GRAPHICS_REQUIREMENTS_D3D12_KHR };
+        XR(reqs(in, sys, &gr));
+        luid = gr.adapterLuid;
+        level = gr.minFeatureLevel;
+    }
+    IDXGIAdapter1 *adapter = adapter_of(luid);
+    if (adapter == NULL) { printf("  no adapter with the runtime's LUID\n"); return 1; }
+    if (d3d == 11) {
+        HR(D3D11CreateDevice((IDXGIAdapter *)adapter, D3D_DRIVER_TYPE_UNKNOWN, NULL, 0, &level, 1, D3D11_SDK_VERSION, &d11, NULL, &d11c));
+        *b11 = (XrGraphicsBindingD3D11KHR){ .type = XR_TYPE_GRAPHICS_BINDING_D3D11_KHR, .device = d11 };
+    } else {
+        HR(D3D12CreateDevice((IUnknown *)adapter, level, &IID_ID3D12Device, (void **)&d12));
+        const D3D12_COMMAND_QUEUE_DESC qd = { .Type = D3D12_COMMAND_LIST_TYPE_DIRECT };
+        HR(ID3D12Device_CreateCommandQueue(d12, &qd, &IID_ID3D12CommandQueue, (void **)&d12q));
+        HR(ID3D12Device_CreateCommandAllocator(d12, D3D12_COMMAND_LIST_TYPE_DIRECT, &IID_ID3D12CommandAllocator, (void **)&d12a));
+        HR(ID3D12Device_CreateCommandList(d12, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, d12a, NULL, &IID_ID3D12GraphicsCommandList, (void **)&d12l));
+        HR(ID3D12GraphicsCommandList_Close(d12l));
+        HR(ID3D12Device_CreateFence(d12, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void **)&d12f));
+        d12e = CreateEventW(NULL, FALSE, FALSE, NULL);
+        const D3D12_DESCRIPTOR_HEAP_DESC hd = { .Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = 1 };
+        HR(ID3D12Device_CreateDescriptorHeap(d12, &hd, &IID_ID3D12DescriptorHeap, (void **)&d12h));
+        *b12 = (XrGraphicsBindingD3D12KHR){ .type = XR_TYPE_GRAPHICS_BINDING_D3D12_KHR, .device = d12, .queue = d12q };
+    }
+    IDXGIAdapter1_Release(adapter);
+    return 0;
+}
+
+static const D3D11_RENDER_TARGET_VIEW_DESC rtv11 = { .Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D };
+static const D3D12_RENDER_TARGET_VIEW_DESC rtv12 = { .Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, .ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D };
+
+// Direct3D's rows run top to bottom, as Vulkan's do: the square is at (0, 0).
+static int draw_d3d11(ID3D11Texture2D *t, float r, float g, float b, float a)
+{
+    ID3D11RenderTargetView *rtv = NULL;
+    HR(ID3D11Device_CreateRenderTargetView(d11, (ID3D11Resource *)t, &rtv11, &rtv));
+    const float c[4] = { r, g, b, a };
+    ID3D11DeviceContext_ClearRenderTargetView(d11c, rtv, c);
+    static uint8_t blue[SQUARE * SQUARE * 4];
+    for (int i = 0; i < SQUARE * SQUARE; i++) { blue[i * 4 + 2] = 255; blue[i * 4 + 3] = 255; }
+    const D3D11_BOX box = { 0, 0, 0, SQUARE, SQUARE, 1 };
+    ID3D11DeviceContext_UpdateSubresource(d11c, (ID3D11Resource *)t, 0, &box, blue, SQUARE * 4, 0);
+    ID3D11RenderTargetView_Release(rtv);
+    return 0;
+}
+
+// The image is in RENDER_TARGET, as the runtime gives it out and wants it back (XR_KHR_D3D12_enable).
+static int draw_d3d12(ID3D12Resource *t, float r, float g, float b, float a)
+{
+    HR(ID3D12CommandAllocator_Reset(d12a));
+    HR(ID3D12GraphicsCommandList_Reset(d12l, d12a, NULL));
+    D3D12_CPU_DESCRIPTOR_HANDLE h;
+    ID3D12DescriptorHeap_GetCPUDescriptorHandleForHeapStart(d12h, &h);
+    ID3D12Device_CreateRenderTargetView(d12, t, &rtv12, h);
+    const float c[4] = { r, g, b, a }, blue[4] = { 0, 0, 1, 1 };
+    ID3D12GraphicsCommandList_ClearRenderTargetView(d12l, h, c, 0, NULL);
+    const D3D12_RECT square = { 0, 0, SQUARE, SQUARE };
+    ID3D12GraphicsCommandList_ClearRenderTargetView(d12l, h, blue, 1, &square);
+    HR(ID3D12GraphicsCommandList_Close(d12l));
+    ID3D12CommandList *lists[] = { (ID3D12CommandList *)d12l };
+    ID3D12CommandQueue_ExecuteCommandLists(d12q, 1, lists);
+    HR(ID3D12CommandQueue_Signal(d12q, d12f, ++d12v));
+    if (ID3D12Fence_GetCompletedValue(d12f) < d12v) {
+        HR(ID3D12Fence_SetEventOnCompletion(d12f, d12v, d12e));
+        WaitForSingleObject(d12e, INFINITE);
+    }
+    return 0;
+}
+#endif
+
 static VkDevice dev;
 static VkQueue queue;
 static VkCommandBuffer cmd;
@@ -269,6 +398,50 @@ static int draw(VkImage image, float r, float g, float b, float a)
     return 0;
 }
 
+// A SWAPCHAIN'S IMAGES, as whichever API the session has gives them.
+struct images {
+    XrSwapchainImageVulkan2KHR vk[4];
+    XrSwapchainImageOpenGLKHR gl[4];
+#ifdef OXS_DIRECT
+    XrSwapchainImageD3D11KHR d11[4];
+    XrSwapchainImageD3D12KHR d12[4];
+#endif
+};
+
+static XrSwapchainImageBaseHeader *images_for_enumerate(struct images *im)
+{
+    for (int i = 0; i < 4; i++) {
+        im->vk[i] = (XrSwapchainImageVulkan2KHR){ .type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR };
+        im->gl[i] = (XrSwapchainImageOpenGLKHR){ .type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR };
+#ifdef OXS_DIRECT
+        im->d11[i] = (XrSwapchainImageD3D11KHR){ .type = XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR };
+        im->d12[i] = (XrSwapchainImageD3D12KHR){ .type = XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR };
+#endif
+    }
+#ifdef OXS_DIRECT
+    if (d3d == 11) return (XrSwapchainImageBaseHeader *)im->d11;
+    if (d3d == 12) return (XrSwapchainImageBaseHeader *)im->d12;
+#endif
+    return gl ? (XrSwapchainImageBaseHeader *)im->gl : (XrSwapchainImageBaseHeader *)im->vk;
+}
+
+// The sRGB RGBA format, in the session's API.
+static int64_t swapchain_format(void)
+{
+    if (d3d != 0) return 29;   // DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+    return gl ? GL_SRGB8_ALPHA8_ : VK_FORMAT_R8G8B8A8_SRGB;
+}
+
+static int draw_image(struct images *im, uint32_t idx, int height, float r, float g, float b, float a)
+{
+#ifdef OXS_DIRECT
+    if (d3d == 11) return draw_d3d11(im->d11[idx].texture, r, g, b, a);
+    if (d3d == 12) return draw_d3d12(im->d12[idx].texture, r, g, b, a);
+#endif
+    if (gl) { draw_gl(im->gl[idx].image, height, r, g, b, a); return 0; }
+    return draw(im->vk[idx].image, r, g, b, a);
+}
+
 // v turned by q.
 static XrVector3f rotate(XrQuaternionf q, XrVector3f v)
 {
@@ -300,9 +473,15 @@ int main(int argc, char **argv)
         layers |= strcmp(argv[i], "--layers") == 0;
         hands |= strcmp(argv[i], "--hands") == 0;
         hand_interaction |= strcmp(argv[i], "--hand-interaction") == 0;
+        if (strcmp(argv[i], "--d3d11") == 0) d3d = 11;
+        if (strcmp(argv[i], "--d3d12") == 0) d3d = 12;
     }
+#ifndef OXS_DIRECT
+    if (d3d != 0) { printf("  Direct3D is Windows'\n"); return 2; }
+#endif
     gl |= win32;
-    const char *exts[8] = { gl ? XR_KHR_OPENGL_ENABLE_EXTENSION_NAME : XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME };
+    const char *exts[8] = { d3d == 11 ? "XR_KHR_D3D11_enable" : d3d == 12 ? "XR_KHR_D3D12_enable"
+                            : gl ? XR_KHR_OPENGL_ENABLE_EXTENSION_NAME : XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME };
     uint32_t nexts = 1;
     if (gl) exts[nexts++] = XR_MNDX_EGL_ENABLE_EXTENSION_NAME;
     if (layers) {
@@ -313,7 +492,7 @@ int main(int argc, char **argv)
     if (hand_interaction) exts[nexts++] = XR_EXT_HAND_INTERACTION_EXTENSION_NAME;
     XrInstanceCreateInfo ci = { .type = XR_TYPE_INSTANCE_CREATE_INFO, .enabledExtensionCount = nexts, .enabledExtensionNames = exts };
     snprintf(ci.applicationInfo.applicationName, sizeof ci.applicationInfo.applicationName, "%s%s%s%s",
-             win32 ? "sim-test-win32" : gl ? "sim-test-gl" : "sim-test", layers ? "-layers" : "", hands ? "-hands" : "",
+             d3d == 11 ? "sim-test-d3d11" : d3d == 12 ? "sim-test-d3d12" : win32 ? "sim-test-win32" : gl ? "sim-test-gl" : "sim-test", layers ? "-layers" : "", hands ? "-hands" : "",
              hand_interaction ? "-interaction" : "");
     ci.applicationInfo.apiVersion = XR_API_VERSION_1_0;
 #ifdef OXS_DIRECT
@@ -350,7 +529,15 @@ int main(int argc, char **argv)
     VkInstance vk = VK_NULL_HANDLE;
     VkCommandPool pool = VK_NULL_HANDLE;
     VkDeviceMemory mem = VK_NULL_HANDLE;
-    if (gl) {
+#ifdef OXS_DIRECT
+    XrGraphicsBindingD3D11KHR d11_binding = { 0 };
+    XrGraphicsBindingD3D12KHR d12_binding = { 0 };
+#endif
+    if (d3d != 0) {
+#ifdef OXS_DIRECT
+        if (setup_d3d(sys, &d11_binding, &d12_binding) != 0) return 1;
+#endif
+    } else if (gl) {
         if (setup_gl(sys, &egl_binding) != 0) return 1;
     } else {
         PFN_xrGetVulkanGraphicsRequirements2KHR reqs;
@@ -499,6 +686,10 @@ int main(int argc, char **argv)
     const struct binding_win32 win32_binding = { .type = XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR };
     XrSessionCreateInfo sci = { .type = XR_TYPE_SESSION_CREATE_INFO,
         .next = win32 ? (const void *)&win32_binding : gl ? (const void *)&egl_binding : (const void *)&gb, .systemId = sys };
+#ifdef OXS_DIRECT
+    if (d3d == 11) sci.next = &d11_binding;
+    if (d3d == 12) sci.next = &d12_binding;
+#endif
     XrSession session;
     XR(xrCreateSession(in, &sci, &session));
     XrSessionActionSetsAttachInfo att = { .type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, .countActionSets = 1, .actionSets = &set };
@@ -535,19 +726,14 @@ int main(int argc, char **argv)
     bool located = false, short_refused = false;
 
     XrSwapchain sc[2];
-    XrSwapchainImageVulkan2KHR images[2][4];
-    XrSwapchainImageOpenGLKHR gl_images[2][4];
+    static struct images eye_images[2];
     uint32_t nimages[2];
     for (int e = 0; e < 2; e++) {
         XrSwapchainCreateInfo swci = { .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
             .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
-            .format = gl ? GL_SRGB8_ALPHA8_ : VK_FORMAT_R8G8B8A8_SRGB, .sampleCount = 1, .width = EYE, .height = EYE, .faceCount = 1, .arraySize = 1, .mipCount = 1 };
+            .format = swapchain_format(), .sampleCount = 1, .width = EYE, .height = EYE, .faceCount = 1, .arraySize = 1, .mipCount = 1 };
         XR(xrCreateSwapchain(session, &swci, &sc[e]));
-        for (int i = 0; i < 4; i++) {
-            images[e][i] = (XrSwapchainImageVulkan2KHR){ .type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR };
-            gl_images[e][i] = (XrSwapchainImageOpenGLKHR){ .type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR };
-        }
-        XR(xrEnumerateSwapchainImages(sc[e], 4, &nimages[e], gl ? (XrSwapchainImageBaseHeader *)gl_images[e] : (XrSwapchainImageBaseHeader *)images[e]));
+        XR(xrEnumerateSwapchainImages(sc[e], 4, &nimages[e], images_for_enumerate(&eye_images[e])));
     }
 
     // THE LAYERS' IMAGES (--layers): each its colour, alpha, and size; the blue square at its top left.
@@ -557,8 +743,7 @@ int main(int argc, char **argv)
         [EQUIRECT] = { 256, 128, 0, 1, 1, 1 }, [QUAD_B] = { 128, 64, 1, 1, 1, 0.5f },
     };
     XrSwapchain psc[PANELS];
-    XrSwapchainImageVulkan2KHR pimages[PANELS][4];
-    XrSwapchainImageOpenGLKHR pgl_images[PANELS][4];
+    static struct images panel_images[PANELS];
     XrSpace view = XR_NULL_HANDLE;
     if (layers) {
         rsi.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
@@ -566,15 +751,11 @@ int main(int argc, char **argv)
         for (int p = 0; p < PANELS; p++) {
             XrSwapchainCreateInfo swci = { .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
                 .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
-                .format = gl ? GL_SRGB8_ALPHA8_ : VK_FORMAT_R8G8B8A8_SRGB, .sampleCount = 1, .width = panel[p].w,
+                .format = swapchain_format(), .sampleCount = 1, .width = panel[p].w,
                 .height = panel[p].h, .faceCount = 1, .arraySize = 1, .mipCount = 1 };
             XR(xrCreateSwapchain(session, &swci, &psc[p]));
-            for (int i = 0; i < 4; i++) {
-                pimages[p][i] = (XrSwapchainImageVulkan2KHR){ .type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR };
-                pgl_images[p][i] = (XrSwapchainImageOpenGLKHR){ .type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR };
-            }
             uint32_t n = 0;
-            XR(xrEnumerateSwapchainImages(psc[p], 4, &n, gl ? (XrSwapchainImageBaseHeader *)pgl_images[p] : (XrSwapchainImageBaseHeader *)pimages[p]));
+            XR(xrEnumerateSwapchainImages(psc[p], 4, &n, images_for_enumerate(&panel_images[p])));
         }
     }
 
@@ -666,8 +847,7 @@ int main(int argc, char **argv)
             XR(xrAcquireSwapchainImage(sc[e], NULL, &idx));
             XrSwapchainImageWaitInfo wi = { .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION };
             XR(xrWaitSwapchainImage(sc[e], &wi));
-            if (gl) draw_gl(gl_images[e][idx].image, EYE, e == 0 ? 1 : 0, e == 0 ? 0 : 1, 0, 1);
-            else if (draw(images[e][idx].image, e == 0 ? 1 : 0, e == 0 ? 0 : 1, 0, 1) != 0) return 1;
+            if (draw_image(&eye_images[e], idx, EYE, e == 0 ? 1 : 0, e == 0 ? 0 : 1, 0, 1) != 0) return 1;
             XR(xrReleaseSwapchainImage(sc[e], NULL));
             pv[e] = (XrCompositionLayerProjectionView){ .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW, .pose = views[e].pose, .fov = views[e].fov,
                 .subImage = { .swapchain = sc[e], .imageRect = { { 0, 0 }, { EYE, EYE } } } };
@@ -685,8 +865,7 @@ int main(int argc, char **argv)
                 XR(xrAcquireSwapchainImage(psc[p], NULL, &idx));
                 XrSwapchainImageWaitInfo wi = { .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION };
                 XR(xrWaitSwapchainImage(psc[p], &wi));
-                if (gl) draw_gl(pgl_images[p][idx].image, panel[p].h, panel[p].r, panel[p].g, panel[p].b, panel[p].a);
-                else if (draw(pimages[p][idx].image, panel[p].r, panel[p].g, panel[p].b, panel[p].a) != 0) return 1;
+                if (draw_image(&panel_images[p], idx, panel[p].h, panel[p].r, panel[p].g, panel[p].b, panel[p].a) != 0) return 1;
                 XR(xrReleaseSwapchainImage(psc[p], NULL));
                 sub[p] = (XrSwapchainSubImage){ .swapchain = psc[p], .imageRect = { { 0, 0 }, { panel[p].w, panel[p].h } } };
             }
@@ -843,7 +1022,20 @@ int main(int argc, char **argv)
     for (int p = 0; layers && p < PANELS; p++) xrDestroySwapchain(psc[p]);
     xrDestroySession(session);
     xrDestroyInstance(in);
-    if (gl) return failures == 0 ? 0 : 1;
+#ifdef OXS_DIRECT
+    if (d11c != NULL) ID3D11DeviceContext_Release(d11c);
+    if (d11 != NULL) ID3D11Device_Release(d11);
+    if (d12 != NULL) {
+        ID3D12DescriptorHeap_Release(d12h);
+        ID3D12Fence_Release(d12f);
+        ID3D12GraphicsCommandList_Release(d12l);
+        ID3D12CommandAllocator_Release(d12a);
+        ID3D12CommandQueue_Release(d12q);
+        ID3D12Device_Release(d12);
+        CloseHandle(d12e);
+    }
+#endif
+    if (gl || d3d != 0) return failures == 0 ? 0 : 1;
     vkDeviceWaitIdle(dev);
     vkDestroyBuffer(dev, square, NULL);
     vkFreeMemory(dev, mem, NULL);

@@ -347,8 +347,51 @@ answers for the Linux machine.)
 
 Verified (2026-11-05, Wine 11, lavapipe): `tests/sim-test.sh build-win` -- the Vulkan, layers, hands and
 hand-interaction runs, 114 checks, all passing (the OpenGL runs need EGL and are left out); `--screenshot`
-in both themes and `--layout-check` (0 faults). Not yet: Direct3D 11 and 12 sessions, OpenGL through WGL,
-the MCP server, a 32-bit build, and any of it on Windows itself.
+in both themes and `--layout-check` (0 faults). Direct3D followed the same day (next section). Not yet:
+OpenGL through WGL, the MCP server, a 32-bit build, and any of it on Windows itself.
+
+## Direct3D 11 and 12 (0.8.0, 2026-11-05)
+
+`XR_KHR_D3D11_enable` and `XR_KHR_D3D12_enable`, Windows builds only (`runtime/swapchain_d3d11.c`,
+`runtime/swapchain_d3d12.c`); elsewhere a Direct3D binding is `XR_ERROR_GRAPHICS_DEVICE_INVALID`. As with
+the other APIs the frames are copied, not shared: the application's textures, copied at release.
+
+* **The adapter** is DXGI's first (`d3d_default_adapter`), the one Windows puts its desktop on, looked up
+  through `dxgi.dll` at run time like every graphics API the runtime touches -- an application that never
+  asks for Direct3D never loads it. Feature level 11.0 for both: textures, a copy and a map are all the
+  runtime does with the device.
+* **Formats**: the four 8-bit colour ones, sRGB first, then four depth formats. A depth swapchain the
+  application will also sample is created TYPELESS (`d3d_typeless_depth`): a D32_FLOAT texture can be a
+  depth buffer but not a shader resource, so the views have to be made from a typeless one.
+* **11** copies each layer's first mip into a staging twin on the device's IMMEDIATE context and maps it.
+  That context is the application's and not thread-safe; OpenXR has `xrReleaseSwapchainImage` called from
+  the application's rendering, which is where this runs -- the same assumption `swapchain_gl.c` makes of
+  a current context.
+* **12** hands images out in RENDER_TARGET (colour) or DEPTH_WRITE (depth), which is what
+  `XR_KHR_D3D12_enable` says they are in and must be returned in. The copy is recorded on the runtime's
+  own allocator and list, barriered to COPY_SOURCE and back, executed on the APPLICATION's queue (the one
+  in the binding, so it is ordered after the application's rendering) and waited for on the runtime's own
+  fence -- for a second at most, after which the device-removed reason is logged.
+
+**Under Wine** there are two Direct3Ds, and `tests/sim-test.sh` runs both:
+* Wine's own, wined3d (11) and vkd3d (12). Without a display wined3d's OpenGL renderer cannot make the
+  window it wants for a GL context, so DXGI enumerates no adapter at all ("Failed to initialize factory,
+  hr 0x887a0004") and the requirements call fails; `WINE_D3D_CONFIG=renderer=vulkan` fixes that much,
+  and vkd3d's 12 then works. wined3d's 11 still wants a window for the device's implicit swapchain
+  (`D3D11CreateDevice`: E_OUTOFMEMORY), so 11 is not run that way.
+* DXVK (11) and vkd3d-proton (12), which los-wine puts in a prefix when those packages are installed
+  (`forge/recipes/los-wine/NOTES.md` in LOS, `apply_dxvk`) -- what a Windows VR program actually gets
+  there. The test puts their DLLs beside a copy of the client and sets them native. DXVK probes OpenXR
+  as it starts, through wineopenxr, which shows in the runtime's log as two "wineopenxr test instance"
+  instances on the LINUX side's active runtime: not this DLL, and harmless.
+
+The test client draws in each (`tests/sim_client.c`, `--d3d11`, `--d3d12`): the adapter by the LUID the
+runtime names, the eyes cleared, the blue square by `UpdateSubresource` (11) or a clear of its rectangle (12).
+
+Verified (2026-11-05, Wine 11, lavapipe): `tests/sim-test.sh build-win`, 217 checks, all passing -- the
+earlier runs plus D3D12 through vkd3d, and D3D11 and D3D12 through DXVK and vkd3d-proton, each alone and
+with `--layers` (every layer type's pixels as the Vulkan run checks them). Not verified: real Windows and
+real drivers, depth swapchains (created, never read), and multisampled or mipmapped ones.
 
 ## Making it the active runtime: one .exe (0.8.0, 2026-11-05)
 

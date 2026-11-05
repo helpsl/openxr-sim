@@ -60,6 +60,15 @@ expect_near() {   # what file x y "R G B"
     if python3 -I -c 'import sys; a=sys.argv[1].split(); b=sys.argv[2].split(); sys.exit(0 if len(a)==3 and all(abs(int(x)-int(y))<=2 for x,y in zip(a,b)) else 1)' "$got" "$5"
     then printf '  %-50s ok (%s)\n' "$1" "$got"; else printf '  %-50s FAILED (%s, wanted %s)\n' "$1" "$got" "$5"; rc=1; fi
 }
+# DIRECT3D UNDER WINE comes two ways. Wine's own: vkd3d for 12, and wined3d for 11 -- which, without a
+# display, works only through its Vulkan renderer and even then wants a window for the device's implicit
+# swapchain, so 11 is not run that way. And DXVK's and vkd3d-proton's, which is what los-wine gives Windows
+# programs when those packages are installed (forge/recipes/los-wine/NOTES.md, apply_dxvk): their DLLs are
+# put beside a copy of the client ("$out/dxvk-bin"), where Windows looks first, and set native.
+dxvk=/usr/lib/x86_64-linux-gnu/dxvk/x64
+vkd3d_proton=/usr/lib/x86_64-linux-gnu/vkd3d-proton/x64
+client_dir="$build"
+overrides=""
 run() {   # api [client arguments]
     local dir="$out/$1"
     mkdir -p "$dir"
@@ -70,9 +79,9 @@ run() {   # api [client arguments]
         # The simulator and the runtime are the ones beside the client (plat_win32.c); the folder is Wine's
         # name for it. No display: nothing here needs one, and a program with windows replaces the
         # prefix's display-less server (los-wine).
-        env -u DISPLAY -u WAYLAND_DISPLAY WINEDEBUG=-all OPENXR_SIM_DEVICE=sim \
-            OPENXR_SIM_HEADLESS="Z:${dir//\//\\}" VK_ICD_FILENAMES="$icd" VK_DRIVER_FILES="$icd" \
-            timeout -k 5 60 wine "Z:${build//\//\\}\\openxr-sim-client.exe" ${2:-} < /dev/null || rc=1
+        env -u DISPLAY -u WAYLAND_DISPLAY WINEDEBUG=-all OPENXR_SIM_DEVICE=sim WINE_D3D_CONFIG=renderer=vulkan \
+            WINEDLLOVERRIDES="$overrides" OPENXR_SIM_HEADLESS="Z:${dir//\//\\}" VK_ICD_FILENAMES="$icd" VK_DRIVER_FILES="$icd" \
+            timeout -k 5 60 wine "Z:${client_dir//\//\\}\\openxr-sim-client.exe" ${2:-} < /dev/null || rc=1
     else
     XR_RUNTIME_JSON="$build/test_runtime.json" OPENXR_SIM_DEVICE=sim OPENXR_SIM_EXE="$build/openxr-sim" \
         OPENXR_SIM_HEADLESS="$dir" VK_ICD_FILENAMES="$icd" VK_DRIVER_FILES="$icd" \
@@ -129,4 +138,22 @@ if [ -z "$wine" ]; then
 fi
 run hands --hands
 run hand-interaction "--hand-interaction --hands"
+if [ -n "$wine" ]; then
+    run d3d12 --d3d12
+    if [ -f "$dxvk/d3d11.dll" ] && [ -f "$vkd3d_proton/d3d12.dll" ]; then
+        client_dir="$out/dxvk-bin"
+        mkdir -p "$client_dir"
+        cp "$build"/openxr-sim-client.exe "$build"/openxr_sim.dll "$build"/openxr-sim.exe \
+            "$dxvk"/d3d11.dll "$dxvk"/dxgi.dll "$vkd3d_proton"/d3d12.dll "$vkd3d_proton"/d3d12core.dll "$client_dir"/
+        overrides="d3d11,dxgi,d3d12,d3d12core=n"
+        run dxvk-d3d11 --d3d11
+        run dxvk-d3d11-layers "--d3d11 --layers"
+        layers dxvk-d3d11-layers
+        run dxvk-d3d12 --d3d12
+        run dxvk-d3d12-layers "--d3d12 --layers"
+        layers dxvk-d3d12-layers
+    else
+        echo "== no DXVK and vkd3d-proton ($dxvk, $vkd3d_proton): Direct3D 11 is not tested"
+    fi
+fi
 exit $rc

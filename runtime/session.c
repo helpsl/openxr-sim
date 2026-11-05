@@ -125,6 +125,10 @@ static void session_fini(struct object *o)
     s->device_open = false;
     if (s->gfx == GFX_VULKAN) vk_session_fini(s);
     if (s->gfx == GFX_GL) gl_session_fini(s);
+#ifdef _WIN32
+    if (s->gfx == GFX_D3D11) d3d11_session_fini(s);
+    if (s->gfx == GFX_D3D12) d3d12_session_fini(s);
+#endif
     if (s->in->session == s) s->in->session = NULL;
     for (size_t i = 0; i < s->nattached; i++) s->attached[i]->attached = false;
     free(s->attached);
@@ -145,6 +149,8 @@ static const XrBaseInStructure *binding_of(const XrSessionCreateInfo *info)
             case XR_TYPE_GRAPHICS_BINDING_EGL_MNDX:
             // A Windows program's, under Wine: the context behind WGL is a host one (swapchain_gl.c).
             case XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR:
+            case XR_TYPE_GRAPHICS_BINDING_D3D11_KHR:
+            case XR_TYPE_GRAPHICS_BINDING_D3D12_KHR:
                 return b;
             default: break;
         }
@@ -170,6 +176,14 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_CreateSession(XrInstance instance, con
     } else if (b->type == XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR) {
         if (!in->asked_vulkan) return XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING;
         gfx = GFX_VULKAN;
+    } else if (b->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR || b->type == XR_TYPE_GRAPHICS_BINDING_D3D12_KHR) {
+#ifdef _WIN32
+        const bool eleven = b->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR;
+        if (!(eleven ? in->asked_d3d11 : in->asked_d3d12)) return XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING;
+        gfx = eleven ? GFX_D3D11 : GFX_D3D12;
+#else
+        return XR_ERROR_GRAPHICS_DEVICE_INVALID;   // a Direct3D binding reaching a Linux runtime
+#endif
     } else {
         if (!in->asked_gl) return XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING;
         gfx = GFX_GL;
@@ -189,6 +203,10 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_CreateSession(XrInstance instance, con
     XrResult r = XR_SUCCESS;
     if (gfx == GFX_VULKAN) r = vk_session_init(s, (const XrGraphicsBindingVulkanKHR *)b);
     if (gfx == GFX_GL) r = gl_session_init(s, b);
+#ifdef _WIN32
+    if (gfx == GFX_D3D11) r = d3d11_session_init(s, (const XrGraphicsBindingD3D11KHR *)b);
+    if (gfx == GFX_D3D12) r = d3d12_session_init(s, (const XrGraphicsBindingD3D12KHR *)b);
+#endif
     if (r != XR_SUCCESS) {
         s->gfx = GFX_NONE;
         destroy(&s->o);

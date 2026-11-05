@@ -14,7 +14,26 @@
 #define XR_USE_GRAPHICS_API_VULKAN
 #define XR_USE_GRAPHICS_API_OPENGL
 #define XR_USE_GRAPHICS_API_OPENGL_ES
+// ON WINDOWS, Direct3D 11 and 12 too (swapchain_d3d11.c, swapchain_d3d12.c), through their C interfaces
+// (COBJMACROS), and Windows' own clock conversion in place of timespec's: XrTime there is
+// QueryPerformanceCounter's (plat_win32.c), which no timespec names.
+#ifdef _WIN32
+#define XR_USE_PLATFORM_WIN32
+#define XR_USE_GRAPHICS_API_D3D11
+#define XR_USE_GRAPHICS_API_D3D12
+#ifndef COBJMACROS
+#define COBJMACROS
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <unknwn.h>
+#include <d3d11.h>
+#include <d3d12.h>
+#else
 #define XR_USE_TIMESPEC
+#endif
 // OpenGL ES's guard declares one structure (XR_FB_swapchain_update_state_opengl_es) in EGL's enum type,
 // which is EGL's `unsigned int`.
 typedef unsigned int EGLenum;
@@ -38,7 +57,8 @@ typedef unsigned int EGLenum;
 void say(const char *fmt, ...) OXS_PRINTF(1, 2);
 const struct oxs_device *device(void);
 
-// XrTime is CLOCK_MONOTONIC in nanoseconds, which is also what XR_KHR_convert_timespec_time converts.
+// XrTime is CLOCK_MONOTONIC in nanoseconds, which is also what XR_KHR_convert_timespec_time converts; on
+// Windows QueryPerformanceCounter's, which XR_KHR_win32_convert_performance_counter_time converts.
 XrTime now_ns(void);
 
 // ---- handles -------------------------------------------------------------------------------------
@@ -94,6 +114,7 @@ struct instance {
     bool hand_tracking;             // XR_EXT_hand_tracking enabled: its functions are there (hand.c)
     bool hand_interaction;          // XR_EXT_hand_interaction enabled: its profile and the pinch and poke poses (input.c)
     bool asked_vulkan, asked_gl;    // the graphics requirements were asked, as OpenXR insists
+    bool asked_d3d11, asked_d3d12;
     PFN_vkGetInstanceProcAddr vk_gipa;   // from xrCreateVulkanInstanceKHR, when the application used it
     VkInstance vk_instance;
     XrEventDataBuffer events[32];   // a ring; the oldest is dropped when it is full
@@ -122,7 +143,7 @@ XrPath path_of(const char *s);       // XR_NULL_PATH for a malformed one
 
 // ---- the session ---------------------------------------------------------------------------------
 
-enum graphics { GFX_NONE, GFX_VULKAN, GFX_GL };
+enum graphics { GFX_NONE, GFX_VULKAN, GFX_GL, GFX_D3D11, GFX_D3D12 };
 
 struct vk {
     PFN_vkGetInstanceProcAddr gipa;
@@ -143,7 +164,8 @@ struct vk {
 #undef VK_FN
 };
 
-struct gl;   // swapchain_gl.c
+struct gl;    // swapchain_gl.c
+struct d3d;   // swapchain_d3d11.c and swapchain_d3d12.c, each its own
 
 struct session {
     struct object o;
@@ -151,6 +173,7 @@ struct session {
     enum graphics gfx;
     struct vk vk;
     struct gl *gl;
+    struct d3d *d3d;
     pthread_mutex_t frame_lock;
     pthread_cond_t frame_cond;
     XrSessionState state;
@@ -221,6 +244,8 @@ struct swapchain {
     VkImageLayout vk_layout;
     bool vk_coherent;
     uint32_t gl_texture[4];
+    void *d3d_image[4];          // ID3D11Texture2D or ID3D12Resource
+    void *d3d_readback;          // where the copy lands: a staging texture (11), a readback buffer (12)
 };
 
 XrResult vk_session_init(struct session *s, const XrGraphicsBindingVulkanKHR *b);
@@ -238,6 +263,30 @@ XrResult gl_swapchain_init(struct swapchain *sc);
 void gl_swapchain_fini(struct swapchain *sc);
 XrResult gl_swapchain_read(struct swapchain *sc, uint32_t image);
 XrResult gl_enumerate_images(struct swapchain *sc, XrSwapchainImageBaseHeader *images);
+
+#ifdef _WIN32
+// What both Direct3Ds share (swapchain_d3d11.c): the DXGI formats offered, how each is stored, and the
+// adapter the runtime asks for -- DXGI's first, the one Windows calls the default.
+const int64_t *d3d_formats(uint32_t *n);
+bool d3d_is_color(int64_t format);
+void d3d_byte_order(struct swapchain *sc);           // sc->bgra, sc->linear from its format
+int64_t d3d_typeless_depth(int64_t format);          // the TYPELESS twin a depth format is created as when sampled
+bool d3d_default_adapter(LUID *luid);
+
+XrResult d3d11_session_init(struct session *s, const XrGraphicsBindingD3D11KHR *b);
+void d3d11_session_fini(struct session *s);
+XrResult d3d11_swapchain_init(struct swapchain *sc);
+void d3d11_swapchain_fini(struct swapchain *sc);
+XrResult d3d11_swapchain_read(struct swapchain *sc, uint32_t image);
+XrResult d3d11_enumerate_images(struct swapchain *sc, XrSwapchainImageBaseHeader *images);
+
+XrResult d3d12_session_init(struct session *s, const XrGraphicsBindingD3D12KHR *b);
+void d3d12_session_fini(struct session *s);
+XrResult d3d12_swapchain_init(struct swapchain *sc);
+void d3d12_swapchain_fini(struct swapchain *sc);
+XrResult d3d12_swapchain_read(struct swapchain *sc, uint32_t image);
+XrResult d3d12_enumerate_images(struct swapchain *sc, XrSwapchainImageBaseHeader *images);
+#endif
 
 // ---- actions -------------------------------------------------------------------------------------
 

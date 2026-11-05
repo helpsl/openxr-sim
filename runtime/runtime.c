@@ -166,7 +166,13 @@ static const struct { const char *name; uint32_t version; } EXTENSIONS[] = {
     // Joints made from the controllers (hand.c).
     { XR_EXT_HAND_TRACKING_EXTENSION_NAME, XR_EXT_hand_tracking_SPEC_VERSION },
     { XR_EXT_HAND_INTERACTION_EXTENSION_NAME, XR_EXT_hand_interaction_SPEC_VERSION },
+#ifdef _WIN32
+    { XR_KHR_D3D11_ENABLE_EXTENSION_NAME, XR_KHR_D3D11_enable_SPEC_VERSION },
+    { XR_KHR_D3D12_ENABLE_EXTENSION_NAME, XR_KHR_D3D12_enable_SPEC_VERSION },
+    { XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME, XR_KHR_win32_convert_performance_counter_time_SPEC_VERSION },
+#else
     { XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME, XR_KHR_convert_timespec_time_SPEC_VERSION },
+#endif
     { XR_EXT_DEBUG_UTILS_EXTENSION_NAME, XR_EXT_debug_utils_SPEC_VERSION },
     { XR_EXT_LOCAL_FLOOR_EXTENSION_NAME, XR_EXT_local_floor_SPEC_VERSION },
     { XR_MND_HEADLESS_EXTENSION_NAME, XR_MND_headless_SPEC_VERSION },
@@ -432,6 +438,38 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_GetOpenGLESGraphicsRequirementsKHR(XrI
     in->asked_gl = true;
     return XR_SUCCESS;
 }
+
+#ifdef _WIN32
+// DIRECT3D: the adapter is DXGI's first (swapchain_d3d11.c, d3d_default_adapter), and what the runtime does
+// on the application's device -- textures, a copy, a map -- is feature level 11.0 in either.
+static XrResult d3d_requirements(struct instance *in, LUID *luid, D3D_FEATURE_LEVEL *level)
+{
+    (void)in;
+    if (!d3d_default_adapter(luid)) return XR_ERROR_SYSTEM_INVALID;
+    *level = D3D_FEATURE_LEVEL_11_0;
+    return XR_SUCCESS;
+}
+
+static XRAPI_ATTR XrResult XRAPI_CALL oxs_GetD3D11GraphicsRequirementsKHR(XrInstance instance, XrSystemId id,
+                                                                         XrGraphicsRequirementsD3D11KHR *r)
+{
+    SYSTEM_CHECK(instance, id);
+    if (r == NULL || r->type != XR_TYPE_GRAPHICS_REQUIREMENTS_D3D11_KHR) return XR_ERROR_VALIDATION_FAILURE;
+    const XrResult res = d3d_requirements(in, &r->adapterLuid, &r->minFeatureLevel);
+    if (res == XR_SUCCESS) in->asked_d3d11 = true;
+    return res;
+}
+
+static XRAPI_ATTR XrResult XRAPI_CALL oxs_GetD3D12GraphicsRequirementsKHR(XrInstance instance, XrSystemId id,
+                                                                         XrGraphicsRequirementsD3D12KHR *r)
+{
+    SYSTEM_CHECK(instance, id);
+    if (r == NULL || r->type != XR_TYPE_GRAPHICS_REQUIREMENTS_D3D12_KHR) return XR_ERROR_VALIDATION_FAILURE;
+    const XrResult res = d3d_requirements(in, &r->adapterLuid, &r->minFeatureLevel);
+    if (res == XR_SUCCESS) in->asked_d3d12 = true;
+    return res;
+}
+#endif
 
 // ---- Vulkan's helpers ----------------------------------------------------------------------------
 //
@@ -708,6 +746,42 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_SessionInsertDebugUtilsLabelEXT(XrSess
     return find(H(session), MAGIC_SESSION) != NULL ? XR_SUCCESS : XR_ERROR_HANDLE_INVALID;
 }
 
+#ifdef _WIN32
+// XrTime is the performance counter in nanoseconds (plat_win32.c, plat_now_ns): the same split multiply
+// both ways, so a counter converted and converted back is the counter.
+static int64_t qpc_frequency(void)
+{
+    static int64_t f;
+    if (f == 0) {
+        LARGE_INTEGER li;
+        QueryPerformanceFrequency(&li);
+        f = li.QuadPart;
+    }
+    return f;
+}
+
+static XRAPI_ATTR XrResult XRAPI_CALL oxs_ConvertWin32PerformanceCounterToTimeKHR(XrInstance instance, const LARGE_INTEGER *counter,
+                                                                                 XrTime *t)
+{
+    if (find(H(instance), MAGIC_INSTANCE) == NULL) return XR_ERROR_HANDLE_INVALID;
+    if (counter == NULL || t == NULL) return XR_ERROR_VALIDATION_FAILURE;
+    const int64_t f = qpc_frequency(), c = counter->QuadPart;
+    if (c <= 0) return XR_ERROR_TIME_INVALID;
+    *t = (c / f) * 1000000000 + (c % f) * 1000000000 / f;
+    return XR_SUCCESS;
+}
+
+static XRAPI_ATTR XrResult XRAPI_CALL oxs_ConvertTimeToWin32PerformanceCounterKHR(XrInstance instance, XrTime t, LARGE_INTEGER *counter)
+{
+    if (find(H(instance), MAGIC_INSTANCE) == NULL) return XR_ERROR_HANDLE_INVALID;
+    if (counter == NULL) return XR_ERROR_VALIDATION_FAILURE;
+    if (t <= 0) return XR_ERROR_TIME_INVALID;
+    const int64_t f = qpc_frequency();
+    // Rounded up, so that converting back gives t again rather than the nanosecond before it.
+    counter->QuadPart = (t / 1000000000) * f + ((t % 1000000000) * f + 999999999) / 1000000000;
+    return XR_SUCCESS;
+}
+#else
 static XRAPI_ATTR XrResult XRAPI_CALL oxs_ConvertTimespecTimeToTimeKHR(XrInstance instance, const struct timespec *ts, XrTime *t)
 {
     if (find(H(instance), MAGIC_INSTANCE) == NULL) return XR_ERROR_HANDLE_INVALID;
@@ -724,6 +798,7 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_ConvertTimeToTimespecTimeKHR(XrInstanc
     ts->tv_nsec = t % 1000000000;
     return XR_SUCCESS;
 }
+#endif
 
 // ---- the dispatch table --------------------------------------------------------------------------
 
@@ -742,7 +817,12 @@ static const struct entry INSTANCE_FUNCTIONS[] = {
     ENTRY(CreateDebugUtilsMessengerEXT) ENTRY(DestroyDebugUtilsMessengerEXT) ENTRY(SubmitDebugUtilsMessageEXT)
     ENTRY(SetDebugUtilsObjectNameEXT) ENTRY(SessionBeginDebugUtilsLabelRegionEXT)
     ENTRY(SessionEndDebugUtilsLabelRegionEXT) ENTRY(SessionInsertDebugUtilsLabelEXT)
+#ifdef _WIN32
+    ENTRY(GetD3D11GraphicsRequirementsKHR) ENTRY(GetD3D12GraphicsRequirementsKHR)
+    ENTRY(ConvertWin32PerformanceCounterToTimeKHR) ENTRY(ConvertTimeToWin32PerformanceCounterKHR)
+#else
     ENTRY(ConvertTimespecTimeToTimeKHR) ENTRY(ConvertTimeToTimespecTimeKHR)
+#endif
     { NULL, NULL }
 };
 
@@ -761,7 +841,13 @@ static const char *const ALL_FUNCTIONS[] = {
     XR_LIST_FUNCTIONS_XR_KHR_vulkan_enable2(NAME)
     XR_LIST_FUNCTIONS_XR_KHR_opengl_enable(NAME)
     XR_LIST_FUNCTIONS_XR_KHR_opengl_es_enable(NAME)
+#ifdef _WIN32
+    XR_LIST_FUNCTIONS_XR_KHR_D3D11_enable(NAME)
+    XR_LIST_FUNCTIONS_XR_KHR_D3D12_enable(NAME)
+    XR_LIST_FUNCTIONS_XR_KHR_win32_convert_performance_counter_time(NAME)
+#else
     XR_LIST_FUNCTIONS_XR_KHR_convert_timespec_time(NAME)
+#endif
     XR_LIST_FUNCTIONS_XR_EXT_debug_utils(NAME)
     XR_LIST_FUNCTIONS_XR_EXT_hand_tracking(NAME)
 };

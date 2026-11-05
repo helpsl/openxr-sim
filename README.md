@@ -12,7 +12,7 @@ It began as LOS's runtime (`apps/los-openxr`) and is its own project since 0.7.0
 
 ## What it does
 
-* Vulkan, OpenGL and OpenGL ES sessions on Linux; Vulkan on Windows, with Direct3D 11 and 12 and WGL to come.
+* Vulkan, OpenGL and OpenGL ES sessions on Linux; Vulkan, Direct3D 11 and Direct3D 12 on Windows, with OpenGL through WGL to come.
 * Composition layers: projection, quad, cylinder, equirect (2), each composited where it belongs.
 * Touch-style controllers by any profile the application suggests; `XR_EXT_hand_tracking` and
   `XR_EXT_hand_interaction` with hands that follow the controllers.
