@@ -444,8 +444,8 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_GetOpenGLESGraphicsRequirementsKHR(XrI
 // on the application's device -- textures, a copy, a map -- is feature level 11.0 in either.
 static XrResult d3d_requirements(struct instance *in, LUID *luid, D3D_FEATURE_LEVEL *level)
 {
-    (void)in;
     if (!d3d_default_adapter(luid)) return XR_ERROR_SYSTEM_INVALID;
+    in->d3d_luid = *luid;
     *level = D3D_FEATURE_LEVEL_11_0;
     return XR_SUCCESS;
 }

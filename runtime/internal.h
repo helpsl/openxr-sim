@@ -115,6 +115,9 @@ struct instance {
     bool hand_interaction;          // XR_EXT_hand_interaction enabled: its profile and the pinch and poke poses (input.c)
     bool asked_vulkan, asked_gl;    // the graphics requirements were asked, as OpenXR insists
     bool asked_d3d11, asked_d3d12;
+#ifdef _WIN32
+    LUID d3d_luid;                  // the adapter the Direct3D requirements named; the device has to be on it
+#endif
     PFN_vkGetInstanceProcAddr vk_gipa;   // from xrCreateVulkanInstanceKHR, when the application used it
     VkInstance vk_instance;
     XrEventDataBuffer events[32];   // a ring; the oldest is dropped when it is full
@@ -272,6 +275,7 @@ bool d3d_is_color(int64_t format);
 void d3d_byte_order(struct swapchain *sc);           // sc->bgra, sc->linear from its format
 int64_t d3d_typeless_depth(int64_t format);          // the TYPELESS twin a depth format is created as when sampled
 bool d3d_default_adapter(LUID *luid);
+bool d3d_same_adapter(const struct instance *in, LUID device, const char *api);   // says so when it is not
 
 XrResult d3d11_session_init(struct session *s, const XrGraphicsBindingD3D11KHR *b);
 void d3d11_session_fini(struct session *s);

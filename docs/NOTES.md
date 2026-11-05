@@ -359,7 +359,10 @@ the other APIs the frames are copied, not shared: the application's textures, co
 * **The adapter** is DXGI's first (`d3d_default_adapter`), the one Windows puts its desktop on, looked up
   through `dxgi.dll` at run time like every graphics API the runtime touches -- an application that never
   asks for Direct3D never loads it. Feature level 11.0 for both: textures, a copy and a map are all the
-  runtime does with the device.
+  runtime does with the device. A device on ANOTHER adapter is refused at xrCreateSession
+  (`d3d_same_adapter`: XR_ERROR_GRAPHICS_DEVICE_INVALID, with both LUIDs on stderr), as both extensions
+  allow -- on a two-GPU machine an application that ignored the LUID would otherwise fail later, at a
+  copy, far from the cause. The owner asked for it after the first Direct3D commit.
 * **Formats**: the four 8-bit colour ones, sRGB first, then four depth formats. A depth swapchain the
   application will also sample is created TYPELESS (`d3d_typeless_depth`): a D32_FLOAT texture can be a
   depth buffer but not a shader resource, so the views have to be made from a typeless one.
@@ -391,7 +394,9 @@ runtime names, the eyes cleared, the blue square by `UpdateSubresource` (11) or 
 Verified (2026-11-05, Wine 11, lavapipe): `tests/sim-test.sh build-win`, 217 checks, all passing -- the
 earlier runs plus D3D12 through vkd3d, and D3D11 and D3D12 through DXVK and vkd3d-proton, each alone and
 with `--layers` (every layer type's pixels as the Vulkan run checks them). Not verified: real Windows and
-real drivers, depth swapchains (created, never read), and multisampled or mipmapped ones.
+real drivers; depth swapchains (created, never read), multisampled, mipmapped and array ones, the BGRA and
+UNORM formats; the performance-counter conversions; and the other-adapter refusal, which needs two
+adapters -- Wine shows one, so only the matching case has run.
 
 ## Making it the active runtime: one .exe (0.8.0, 2026-11-05)
 

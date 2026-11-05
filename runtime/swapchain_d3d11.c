@@ -82,6 +82,19 @@ bool d3d_default_adapter(LUID *luid)
     return ok;
 }
 
+// THE DEVICE ON ANOTHER ADAPTER: XR_KHR_D3D11_enable and _D3D12_enable have the application make its device
+// on the adapter the requirements named, and the session refused (XR_ERROR_GRAPHICS_DEVICE_INVALID) when it
+// did not. With two GPUs, an application that ignores the LUID would otherwise fail later and far from the
+// cause; with one, every device passes.
+bool d3d_same_adapter(const struct instance *in, LUID device, const char *api)
+{
+    if (device.LowPart == in->d3d_luid.LowPart && device.HighPart == in->d3d_luid.HighPart) return true;
+    fprintf(stderr, "openxr-sim: xrCreateSession: the %s device is not on the adapter xrGet%sGraphicsRequirementsKHR named "
+            "(LUID %08lx:%08lx, not %08lx:%08lx)\n", api, api, (unsigned long)device.HighPart, (unsigned long)device.LowPart,
+            (unsigned long)in->d3d_luid.HighPart, (unsigned long)in->d3d_luid.LowPart);
+    return false;
+}
+
 // ---- Direct3D 11 -----------------------------------------------------------------------------------
 
 struct d3d {
@@ -92,6 +105,16 @@ struct d3d {
 XrResult d3d11_session_init(struct session *s, const XrGraphicsBindingD3D11KHR *b)
 {
     if (b->device == NULL) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+    // Its adapter, through DXGI: a Direct3D 11 device is also an IDXGIDevice.
+    IDXGIDevice *dx = NULL;
+    IDXGIAdapter *adapter = NULL;
+    DXGI_ADAPTER_DESC desc = { 0 };
+    bool known = SUCCEEDED(ID3D11Device_QueryInterface(b->device, &IID_IDXGIDevice, (void **)&dx)) &&
+                 SUCCEEDED(IDXGIDevice_GetAdapter(dx, &adapter)) && SUCCEEDED(IDXGIAdapter_GetDesc(adapter, &desc));
+    if (adapter != NULL) IDXGIAdapter_Release(adapter);
+    if (dx != NULL) IDXGIDevice_Release(dx);
+    if (!known) say("Direct3D 11: the device's adapter could not be found; not checked");
+    else if (!d3d_same_adapter(s->in, desc.AdapterLuid, "D3D11")) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
     struct d3d *d = calloc(1, sizeof *d);
     if (d == NULL) return XR_ERROR_OUT_OF_MEMORY;
     d->device = b->device;

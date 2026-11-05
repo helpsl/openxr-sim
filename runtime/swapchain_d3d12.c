@@ -36,6 +36,8 @@ struct readback {
 XrResult d3d12_session_init(struct session *s, const XrGraphicsBindingD3D12KHR *b)
 {
     if (b->device == NULL || b->queue == NULL) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+    LUID luid;
+    if (!d3d_same_adapter(s->in, *ID3D12Device_GetAdapterLuid(b->device, &luid), "D3D12")) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
     struct d3d *d = calloc(1, sizeof *d);
     if (d == NULL) return XR_ERROR_OUT_OF_MEMORY;
     s->d3d = d;
