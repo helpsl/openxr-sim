@@ -348,7 +348,7 @@ answers for the Linux machine.)
 Verified (2026-11-05, Wine 11, lavapipe): `tests/sim-test.sh build-win` -- the Vulkan, layers, hands and
 hand-interaction runs, 114 checks, all passing (the OpenGL runs need EGL and are left out); `--screenshot`
 in both themes and `--layout-check` (0 faults). Direct3D followed the same day (next section). Not yet:
-OpenGL through WGL, the MCP server, a 32-bit build, and any of it on Windows itself.
+OpenGL through WGL, the MCP server and a 32-bit build. (Windows itself: the next section's last paragraph.)
 
 ## Direct3D 11 and 12 (0.8.0, 2026-11-05)
 
@@ -393,8 +393,15 @@ runtime names, the eyes cleared, the blue square by `UpdateSubresource` (11) or 
 
 Verified (2026-11-05, Wine 11, lavapipe): `tests/sim-test.sh build-win`, 217 checks, all passing -- the
 earlier runs plus D3D12 through vkd3d, and D3D11 and D3D12 through DXVK and vkd3d-proton, each alone and
-with `--layers` (every layer type's pixels as the Vulkan run checks them). Not verified: real Windows and
-real drivers; depth swapchains (created, never read), multisampled, mipmapped and array ones, the BGRA and
+with `--layers` (every layer type's pixels as the Vulkan run checks them).
+
+ON WINDOWS ITSELF (2026-11-05, GitHub Actions' windows-latest, run 42017716855): `.github/workflows/build.yml`
+builds the .exe with MSVC natively -- the runtime embedded through a native path, no `Z:` -- and runs D3D11
+and D3D12, each alone and with `--layers`, on WARP, the runner's only adapter, with sim-test.sh's pixel
+checks: all passing. So the platform layer (the shared memory, the pipe, starting the simulator), the
+simulator headless and both Direct3Ds have run on Windows; Vulkan has not (no Vulkan there).
+
+Not verified: real GPUs and their drivers; Vulkan on Windows; depth swapchains (created, never read), multisampled, mipmapped and array ones, the BGRA and
 UNORM formats; the performance-counter conversions; and the other-adapter refusal, which needs two
 adapters -- Wine shows one, so only the matching case has run.
 
