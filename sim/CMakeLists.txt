@@ -67,6 +67,8 @@ else()
     pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
     target_link_libraries(openxr-sim PRIVATE PkgConfig::FONTCONFIG PkgConfig::DBUS PkgConfig::WAYLAND_CLIENT)
 endif()
+oxs_notices_source(_oxs_notices)
+target_sources(openxr-sim PRIVATE "${_oxs_notices}")
 target_include_directories(openxr-sim PRIVATE . "${PROJECT_SOURCE_DIR}/common" "${PROJECT_SOURCE_DIR}/third_party/clay"
     "${PROJECT_SOURCE_DIR}/third_party/stb")
 target_link_libraries(openxr-sim PRIVATE ${OXS_GLFW} OpenGL::GL Threads::Threads)

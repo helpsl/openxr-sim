@@ -12,6 +12,8 @@
 
 #include <json/json.h>
 
+#include "notices.hpp"
+
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -42,7 +44,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr const char* kVersion = "0.6.0";
+constexpr const char* kVersion = OPENXR_SIM_VERSION;   // the project's (mcp/CMakeLists.txt)
 
 std::string prefix() { return std::format("openxr-sim/{}/", ::getuid()); }
 
@@ -530,7 +532,12 @@ int main(int argc, char** argv) {
                 "openxr-sim-mcp -- the simulated OpenXR headset as an MCP server, over stdio\n\n"
                 "Register it with an MCP client, e.g. Claude Code:\n"
                 "  claude mcp add openxr-sim -- openxr-sim-mcp\n\n"
-                "It drives the simulators (openxr-sim) running for this user's OpenXR sessions.\n");
+                "It drives the simulators (openxr-sim) running for this user's OpenXR sessions.\n"
+                "--licenses prints the licences of the code it is built with.\n");
+            return 0;
+        }
+        if (a == "--licenses") {
+            std::fputs(oxs::kThirdPartyNotices, stdout);
             return 0;
         }
         std::fprintf(stderr, "openxr-sim-mcp: unknown option '%s'\n", argv[i]);

@@ -457,7 +457,7 @@ choice shown as such. NOT verified: the UAC prompt and the elevated relaunch (Wi
 Khronos loader finding the runtime through the registry (no Windows loader built), and clicking the button
 -- the commands it runs were tested, the click was not.
 
-## Releases on GitHub, and a .deb (0.8.1, 2026-11-05)
+## Releases on GitHub, and a .deb (0.8.1 and 0.8.2, 2026-11-05)
 
 The owner: "Can we also package a deb or appimage for linux". `.github/workflows/build.yml` makes each
 tag's release: the Windows .exe (built and tested on the runner, previous sections) and
@@ -473,16 +473,30 @@ tag's release: the Windows .exe (built and tested on the runner, previous sectio
 * **Depends**: dpkg-shlibdeps for what is linked; GLFW `dlopen`s Wayland's cursor and EGL libraries and
   xkbcommon, which it cannot see, so those are named; X11's and libdecor are Recommends (a Wayland
   desktop needs no X11), as is the OpenXR loader (applications need it, the runtime does not).
-* **One .deb per distribution, not one for all**: the first, built on Ubuntu 24.04, installed there and
-  nowhere newer -- Debian 13 and Ubuntu 26.04 have jsoncpp as libjsoncpp26, 24.04 as libjsoncpp25, and
-  apt refused it ("libjsoncpp25 ... is not installable"; found in VMs, below). Ubuntu ships no static
-  jsoncpp to sidestep it with. So each is built in its own distribution's container, against its own
-  libraries, as `<version>-1~<distro>` (`~` sorts first, so a distribution's own packaging would win).
-  GCC 14 or newer for `std::println` (24.04's default is 13); GLFW bundled, as 3.4 is not everywhere.
-  The desktop entry moved here from LOS's recipe (`packaging/openxr-sim.desktop`).
-* **Checked as installed**: `apt install` of the .deb on the runner, then the runtime's export, the
-  manifest naming it, one frame (`--screenshot`) and `--layout-check`. Not the end-to-end test: Ubuntu's
-  OpenXR loader is older than the headers the client is built with.
+* **One .deb for all of them, with JsonCpp inside it** (0.8.2). 0.8.1's, built on Ubuntu 24.04, installed
+  there and nowhere newer: a program linked to the system's JsonCpp records its library's versioned
+  name, libjsoncpp.so.25 on 24.04 and .so.26 on Debian 13 and Ubuntu 26.04 (LOS: .so.27), and JsonCpp
+  changes that name whenever its C++ interface changes -- so no Depends could make one binary fit (found
+  in VMs, below). Ubuntu ships no static JsonCpp. So `cmake/jsoncpp.cmake`, with
+  OPENXR_SIM_BUNDLED_JSONCPP, fetches JsonCpp 1.9.8's official release tarball, checks its SHA-256, and
+  builds its three sources as a static library of our own -- its CMake project is not added
+  (SOURCE_SUBDIR names a directory it does not have), so none of its options or install rules reach the
+  package. Every other library the .deb links (glibc, libstdc++, fontconfig, dbus, wayland, libGL,
+  xkbcommon) has kept its versioned name for years, so one built on the oldest system installs on the
+  newer ones. The default stays the system's JsonCpp: LOS's forge has no network in its sandbox, and a
+  distribution would link its own. (A per-distribution .deb was the step between, never released.)
+* **Built on Ubuntu 24.04**, the oldest it is for: GCC 14 for `std::println` (24.04's default is 13);
+  GLFW bundled, as 3.4 is not everywhere. The desktop entry moved here from LOS's recipe
+  (`packaging/openxr-sim.desktop`).
+* **The third parties' licences** are `THIRD_PARTY_NOTICES.md`: GLFW (zlib) and the Wayland protocol
+  files its Linux build compiles (MIT), Clay (zlib), stb (MIT or public domain), JsonCpp when bundled
+  (MIT or public domain), and the Khronos headers compiled against (Apache-2.0 or MIT). The .deb installs
+  it with LICENSE in /usr/share/doc/openxr-sim/; and as the Windows .exe is the whole download, it is
+  compiled into both programs (`cmake/notices.cmake`, bytes, as MSVC limits a string literal's length)
+  and printed by `--licenses`.
+* **Checked as installed** in CI: the one .deb `apt install`ed in Ubuntu 24.04, Ubuntu 26.04 and Debian 13
+  containers, then the runtime's export, the manifest naming it, the notices, one frame (`--screenshot`)
+  and `--layout-check`. The end-to-end chain is the VMs' (below).
 * **v0.8.0's release was made before the .deb existed** and has only the .exe; its tree has no CPack rules.
 
 **In VMs** (2026-11-05): each distribution's official cloud image under QEMU, driven by cloud-init with no
@@ -493,6 +507,6 @@ its SHA-256, `apt install`s it, then as an ordinary user `openxr-sim --register-
 surfaceless), both with every layer type, and hands, on lavapipe and llvmpipe through that loader with no
 XR_RUNTIME_JSON, checking the eyes' pixels; then one frame, `--layout-check`, `--unregister-runtime`, and
 `apt remove`. The loaders: Ubuntu 24.04's is 1.0.20, Debian 13's and Ubuntu 26.04's 1.1.47.
-* 0.8.1's single .deb (built on 24.04): Ubuntu 24.04 passed all of it; Debian 13 and Ubuntu 26.04 could
-  not install it (libjsoncpp25), which is what made the per-distribution packages.
+* 0.8.1's .deb (built on 24.04, system JsonCpp): Ubuntu 24.04 passed all of it; Debian 13 and Ubuntu
+  26.04 could not install it (libjsoncpp25), which is what made 0.8.2 bundle JsonCpp.
 

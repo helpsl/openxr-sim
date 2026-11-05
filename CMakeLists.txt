@@ -1,12 +1,13 @@
 # openxr-sim: an OpenXR runtime whose headset is a window on the desktop. README.md says what it is,
 # docs/DESIGN.md how it works.
 cmake_minimum_required(VERSION 3.21)
-project(openxr-sim VERSION 0.8.1 LANGUAGES C CXX)
+project(openxr-sim VERSION 0.8.2 LANGUAGES C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(GNUInstallDirs)
+include(cmake/notices.cmake)
 # Every program and the runtime in one directory (one per configuration with Visual Studio's generators),
 # where the test manifest and tests/sim-test.sh look for them.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
@@ -124,6 +125,8 @@ endif()
 # client libraries, xkbcommon) it cannot see, so those are named here. .github/workflows/build.yml builds
 # it on Ubuntu 24.04 for each release.
 if(NOT WIN32)
+    # The licences: ours and the third parties' (THIRD_PARTY_NOTICES.md, which --licenses also prints).
+    install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION "${CMAKE_INSTALL_DOCDIR}")
     if(OPENXR_SIM_BUILD_SIMULATOR)
         install(FILES packaging/openxr-sim.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
     endif()

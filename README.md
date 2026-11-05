@@ -23,9 +23,9 @@ It began as LOS's runtime (`apps/los-openxr`) and is its own project since 0.7.0
 ## Installing
 
 Each [release](https://github.com/helpsl/openxr-sim/releases) has `openxr-sim-<version>-windows-x64.exe` (the
-runtime is inside it) and a .deb for each of Ubuntu 24.04, Ubuntu 26.04 and Debian 13, named for it:
+runtime is inside it) and one .deb for Ubuntu 24.04 or newer and Debian 13 or newer:
 
-    sudo apt install ./openxr-sim_<version>-1~ubuntu24.04_amd64.deb   # or ~ubuntu26.04, ~debian13
+    sudo apt install ./openxr-sim_<version>_amd64.deb
 
 Then run `openxr-sim` and choose "Make this the active runtime" (below).
 
@@ -42,8 +42,15 @@ Linux, with CMake 3.21+, a C11 and C++23 compiler, and the development files of:
 Installed, the runtime is `<libdir>/openxr-sim/libopenxr_sim.so` with its manifest in
 `share/openxr/1/openxr_sim.json`; `-DOPENXR_SIM_INSTALL_ACTIVE_RUNTIME=ON` also makes it the system's
 default runtime. GLFW, Clay and stb are in `third_party/` (GLFW is built from there on Windows, and with
-`-DOPENXR_SIM_BUNDLED_GLFW=ON` anywhere). A .deb: configure with `-DCMAKE_INSTALL_PREFIX=/usr`, then
-`cpack` in the build directory.
+`-DOPENXR_SIM_BUNDLED_GLFW=ON` anywhere). `-DOPENXR_SIM_BUNDLED_JSONCPP=ON` fetches JsonCpp's release
+(pinned by its SHA-256) and links it into the MCP server statically, instead of the system's
+(`cmake/jsoncpp.cmake`). A .deb: configure with `-DCMAKE_INSTALL_PREFIX=/usr`, then `cpack` in the build
+directory; the release's is built with both bundled.
+
+## Licence
+
+Apache-2.0 (`LICENSE`). The third-party code it is built with, and its licences, are in
+`THIRD_PARTY_NOTICES.md`, which `openxr-sim --licenses` also prints.
 
 Windows, with MSVC (on Windows, or from Linux through Wine with los-wine's toolchain file), and the OpenXR
 and Vulkan headers (no loaders: the runtime links neither):

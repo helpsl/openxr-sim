@@ -6,6 +6,7 @@
 
 #include "app.hpp"
 #include "install.hpp"
+#include "notices.hpp"
 #include "os.hpp"
 #include "sim_protocol.h"
 #include "ui.hpp"
@@ -14,6 +15,10 @@
 #include <cstdlib>
 #include <print>
 #include <string>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -46,13 +51,21 @@ int main(int argc, char** argv) {
                 "                    removes the installed copy -- what Settings > Apps' Uninstall runs\n"
                 "  --screenshot OUT  render one frame to a PNG and exit; no display needed\n"
                 "  --size WxH        the size --screenshot and --layout-check use (default 1280x760)\n"
-                "  --layout-check    lay one frame out headless and report its layout faults\n\n"
+                "  --layout-check    lay one frame out headless and report its layout faults\n"
+                "  --licenses        the licences of the code it is built with (THIRD_PARTY_NOTICES.md)\n\n"
                 "The runtime starts it with --headset --app NAME and the shared memory and its wake channel\n"
                 "(descriptors 3 and 4; on Windows --link SHM,PIPE). OPENXR_SIM_HEADLESS=DIR makes that a test:\n"
                 "no window, a scripted move, and the last frame and this window written to DIR.\n\n"
                 "The window follows the desktop's light or dark scheme and accent colour (the XDG portal's\n"
                 "org.freedesktop.appearance; on Windows the personalisation settings). OPENXR_SIM_THEME=dark\n"
                 "or light sets the scheme instead; --screenshot and --layout-check use only that (default dark).");
+            return 0;
+        }
+        if (a == "--licenses") {
+#ifdef _WIN32
+            SetConsoleOutputCP(CP_UTF8);
+#endif
+            std::fputs(oxs::kThirdPartyNotices, stdout);
             return 0;
         }
         if (a == "--use" || a == "--unuse") {
