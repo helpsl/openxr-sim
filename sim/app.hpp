@@ -2,7 +2,7 @@
 // Copyright 2026 The openxr-sim authors
 #pragma once
 
-// THE SIMULATOR'S WINDOW (DESIGN.md, "The simulator window"): the application's two eyes side by side,
+// THE SIMULATOR'S WINDOW (DESIGN.md, "The simulator window"): the application's eyes -- one, or both side by side --
 // and a panel -- which device the mouse and keys move, each hand's buttons, the application's state, the
 // keys. Started by the runtime with --headset when an application creates a session; started by itself,
 // it says whether OpenXR applications will use it and lets the person choose.
@@ -89,6 +89,8 @@ private:
     bool dragging_ = false;
     float last_x_ = 0, last_y_ = 0;
     int view_px_w_ = 640, view_px_h_ = 640;   // an eye's room in the view, in physical pixels (last frame's)
+    int shown_ = 0;               // which eyes the view shows: 0 the left, 1 the right, 2 both. Only the view:
+                                  // both are still taken, composited and handed to the socket's `shot`
     double last_tick_ = 0;
     float scroll_ = 0;
     bool use_sim_ = false;        // the idle window's switch: `device = sim` in the configuration

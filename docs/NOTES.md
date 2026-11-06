@@ -515,3 +515,21 @@ XR_RUNTIME_JSON, checking the eyes' pixels; then one frame, `--layout-check`, `-
   all of it -- 30 steps and 35 pixel checks -- plus the MCP server answering `initialize` (version 0.8.2)
   and `tools/list` with no JsonCpp library loaded, and the notices in `copyright` and `--licenses`.
 
+## One eye or both (2026-11-06)
+
+The owner: "switch to viewing either a single eye or both eyes, default to showing just one eye. It'll
+still render both eyes under the hood." The panel's first card after the application's, "The view shows":
+Left eye, Right eye, Both eyes, and V steps through them (`App::shown_`, sim/app.hpp; `build_view`).
+
+* **Only the view changes.** `take_frame` still converts both eyes every frame, at the size one shown eye
+  has room for (`view_px_w_`), so a switch shows the other eye straight away rather than at the next
+  frame -- which may never come from an application stopped at a breakpoint. The hidden eye's conversion is
+  the cost; one eye shown is twice the room, so each eye is converted larger than before.
+* **Left, not "one":** a single-eye view has to be one of them, and either may be the one in question (a
+  layer kept from one eye, a projection with the eyes swapped), so both are offered.
+* **Not remembered.** Each window starts on the left eye, as asked; the configuration file stays the
+  device setting alone.
+* Checked through `tests/sim-test.sh`: the headless `window.png` with each of the three as the default --
+  red eye alone, green alone, both side by side -- and 0 layout faults in each; `left.ppm`/`right.ppm` and
+  the summary unchanged.
+

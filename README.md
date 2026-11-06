@@ -1,7 +1,7 @@
 # openxr-sim
 
-An OpenXR runtime whose headset is a window. An OpenXR application runs as it would on a headset; its two
-eyes appear side by side on the desktop, and the headset and both controllers are moved and pressed with
+An OpenXR runtime whose headset is a window. An OpenXR application runs as it would on a headset; its eyes
+appear on the desktop -- one, or both side by side -- and the headset and both controllers are moved and pressed with
 the mouse and keyboard -- or by a program, over a socket, or by an agent, through an MCP server.
 
 Without the simulated headset switched on it is the other useful thing: a runtime that is there and says

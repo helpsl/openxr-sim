@@ -252,7 +252,7 @@ void App::build(float w, float h) {
     }
 }
 
-// THE TWO EYES, side by side and as large as the room allows, their own proportions kept.
+// THE EYES: the one chosen, or both side by side, as large as the room allows, their own proportions kept.
 void App::build_view(float w, float h) {
     const Theme& t = theme();
     const float gap = px(Space::S);
@@ -268,7 +268,8 @@ void App::build_view(float w, float h) {
     st.clip_x = st.clip_y = true;
     Box view(st);
 
-    const float room_w = std::max(1.0f, (w - 3 * gap) / 2), room_h = std::max(1.0f, h - 2 * gap);
+    const int shown = shown_ == 2 ? 2 : 1;
+    const float room_w = std::max(1.0f, (w - (shown + 1) * gap) / shown), room_h = std::max(1.0f, h - 2 * gap);
     const float scale = win_.opened() ? win_.scale() : 1.0f;
     view_px_w_ = static_cast<int>(room_w * scale);
     view_px_h_ = static_cast<int>(room_h * scale);
@@ -284,7 +285,7 @@ void App::build_view(float w, float h) {
         return;
     }
     for (int e = 0; e < 2; e++) {
-        if (eye_view_[e].bgra == nullptr) continue;
+        if (eye_view_[e].bgra == nullptr || (shown_ != 2 && e != shown_)) continue;
         const float sw = static_cast<float>(eyes_[e].source_w), sh = static_cast<float>(eyes_[e].source_h);
         const float fit = std::min(room_w / sw, room_h / sh);
         Style img;
@@ -331,6 +332,11 @@ void App::build_panel(float w, float h) {
     }
     {
         Card card;
+        caps("The view shows");
+        segmented("eyes", { "Left eye", "Right eye", "Both eyes" }, static_cast<size_t>(shown_));
+    }
+    {
+        Card card;
         caps("The mouse and keys move");
         segmented("part", { "Headset", "Right hand", "Left hand" }, static_cast<size_t>(rig_.selected()));
         double p[3], yaw = 0, pitch = 0;
@@ -346,7 +352,7 @@ void App::build_panel(float w, float h) {
         caps("Keys");
         for (const char* line : {
                  "Drag the view to turn. W A S D move, Q E down and up; Shift is slower.",
-                 "Tab: the next device. R: everything back where it started.",
+                 "Tab: the next device. R: everything back where it started. V: the left eye, the right, or both.",
                  "Space trigger, G grip, Z A/X, X B/Y, M menu, arrows the stick, C its click -- on the selected hand, "
                  "or the right while the headset is selected." })
             text(line, Role::Secondary, t.dim, { .wrap = true });
@@ -507,6 +513,7 @@ void App::on_key(int key, bool down, bool repeat, const Mods& mods) {
         if (repeat) return;
         if (key == GLFW_KEY_TAB) { rig_.select_next(); publish(); return; }
         if (code == 'r') { rig_.reset(); publish(); return; }
+        if (code == 'v') { shown_ = (shown_ + 1) % 3; dirty_ = true; return; }
         keys_.insert(code);
     } else {
         keys_.erase(code);
@@ -533,6 +540,8 @@ void App::on_button(float x, float y, int button, bool pressed, int clicks) {
         if (hand < 2 && i < std::size(kPanelButtons)) { mouse_held_[hand] |= kPanelButtons[i].control; publish(); }
     } else if (tag == "part") {
         if (h->index < 3) { rig_.select(static_cast<Part>(h->index)); publish(); }
+    } else if (tag == "eyes") {
+        if (h->index < 3) { shown_ = static_cast<int>(h->index); dirty_ = true; }
     } else if (tag == "reset") {
         rig_.reset();
         publish();
@@ -562,7 +571,7 @@ void App::on_motion(float x, float y) {
     const auto h = ui_->hit(x, y);
     const std::string_view tag = h ? h->tag : "";
     win_.set_cursor(tag == "view" && link_.attached() ? Cursor::Move
-                    : tag == "hold" || tag == "part" || tag == "reset" || tag == "use" || tag == "runtime-on" || tag == "runtime-off"
+                    : tag == "hold" || tag == "part" || tag == "eyes" || tag == "reset" || tag == "use" || tag == "runtime-on" || tag == "runtime-off"
                     ? Cursor::Hand : Cursor::Arrow);
     dirty_ = true;
 }

@@ -142,11 +142,15 @@ the same simulated controller (`runtime/input.c`), with no change to the simulat
 
 ## The simulator window
 
-Both eyes side by side, and a side panel: which device the mouse and keys move (headset, right hand, left
-hand), each hand's buttons as buttons that can be held, the poses, the application's name, its frame rate
+The left eye, the right eye or both side by side (the panel's "The view shows"; V steps through them), and a
+side panel: which device the mouse and keys move (headset, right hand, left hand), each hand's buttons as buttons that can be held, the poses, the application's name, its frame rate
 and session state, and the keys.
 
 * Drag in the view: turn the selected device. W A S D: move it, Q E down and up, Shift slower.
+* **One eye by default, the left**, so it gets the whole view. The choice is the window's alone: both
+  eyes are still taken from every frame, composited and kept, so switching shows the other at once, and
+  the control socket's `shot`, the MCP server's `screenshot` and the headless test's `left.ppm` and
+  `right.ppm` are always both. It is not remembered: each window starts on the left eye.
 * Tab: the next device. R (or "Put everything back"): every device back where it started -- the same poses
   the runtime answers before the simulator has written any (`oxs_tracking_home`, common/xrmath.h).
 * Space trigger, G grip, Z primary button (A/X), X secondary (B/Y), M menu, arrow keys the thumbstick, C
