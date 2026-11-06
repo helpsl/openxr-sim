@@ -1,7 +1,7 @@
 # openxr-sim: an OpenXR runtime whose headset is a window on the desktop. README.md says what it is,
 # docs/DESIGN.md how it works.
 cmake_minimum_required(VERSION 3.21)
-project(openxr-sim VERSION 0.8.2 LANGUAGES C CXX)
+project(openxr-sim VERSION 0.8.3 LANGUAGES C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 23)

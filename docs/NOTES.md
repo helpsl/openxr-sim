@@ -515,7 +515,7 @@ XR_RUNTIME_JSON, checking the eyes' pixels; then one frame, `--layout-check`, `-
   all of it -- 30 steps and 35 pixel checks -- plus the MCP server answering `initialize` (version 0.8.2)
   and `tools/list` with no JsonCpp library loaded, and the notices in `copyright` and `--licenses`.
 
-## One eye or both (2026-11-06)
+## One eye or both (0.8.3, 2026-11-06)
 
 The owner: "switch to viewing either a single eye or both eyes, default to showing just one eye. It'll
 still render both eyes under the hood." The panel's first card after the application's, "The view shows":
