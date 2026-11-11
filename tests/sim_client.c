@@ -25,6 +25,12 @@
 // be hands: the right pinch's value is the scripted trigger and its ready_ext true, and each hand's pinch
 // and poke poses located against the grip (and, with --hands, against the open left hand's joints). Without
 // it, the extension's profile and paths are refused.
+// --spatial: XR_EXT_spatial_entity with XR_EXT_spatial_marker_tracking and XR_EXT_spatial_anchor (and
+// XR_EXT_future) -- the room's markers as they start (common/xrmath.h, oxs_room_home) discovered before the
+// head turn (the QR code, the Micro QR code and the ArUco marker; the AprilTag on the left wall is out of
+// view), the discovery recommended once the turn brings the AprilTag into view, and discovered then; an anchor
+// made and found again; the Micro QR code, which the simulator takes away with the turn, STOPPED; and the
+// errors for configurations, futures and queries that are wrong.
 //
 // --d3d11, --d3d12 (Windows): the same eyes drawn in Direct3D -- cleared, and the blue square put in by
 // UpdateSubresource (11) or a clear of its rectangle (12) -- on the adapter the runtime names.
@@ -79,7 +85,7 @@ typedef struct { XrStructureType type; const void *next; void *getProcAddress, *
 #ifdef OXS_DIRECT
 #define XR_FUNCTIONS(X) X(xrAcquireSwapchainImage) X(xrAttachSessionActionSets) X(xrBeginFrame) X(xrBeginSession) \
     X(xrCreateAction) X(xrCreateActionSet) X(xrCreateActionSpace) X(xrCreateInstance) X(xrCreateReferenceSpace) \
-    X(xrCreateSession) X(xrCreateSwapchain) X(xrDestroyInstance) X(xrDestroySession) X(xrDestroySwapchain) X(xrEndFrame) \
+    X(xrCreateSession) X(xrCreateSwapchain) X(xrDestroyInstance) X(xrDestroySession) X(xrDestroySpace) X(xrDestroySwapchain) X(xrEndFrame) \
     X(xrEndSession) X(xrEnumerateSwapchainImages) X(xrGetActionStateBoolean) X(xrGetActionStateFloat) \
     X(xrGetCurrentInteractionProfile) X(xrGetSystem) X(xrGetSystemProperties) X(xrLocateSpace) X(xrLocateViews) \
     X(xrPathToString) X(xrPollEvent) X(xrReleaseSwapchainImage) X(xrRequestExitSession) X(xrStringToPath) \
@@ -164,7 +170,7 @@ static void check(int ok, const char *what)
 static XrInstance in;
 static XrPath path(const char *s) { XrPath p = XR_NULL_PATH; xrStringToPath(in, s, &p); return p; }
 
-static bool gl, win32, layers, hands, hand_interaction;
+static bool gl, win32, layers, hands, hand_interaction, spatial;
 static int d3d;   // 11 or 12 with --d3d11, --d3d12; else 0
 
 // XrGraphicsBindingOpenGLWin32KHR, mirrored: openxr_platform.h declares it only with windows.h.
@@ -465,6 +471,361 @@ static double yaw_of(XrQuaternionf q)
     return atan2(2.0 * (q.w * q.y + q.x * q.z), 1.0 - 2.0 * (q.y * q.y + q.x * q.x)) * 180 / M_PI;
 }
 
+// ---- --spatial -------------------------------------------------------------------------------------
+
+// A call that has to succeed, in a function with nothing to return: a failure is counted.
+#define SPX(call) check((call) == XR_SUCCESS, #call)
+
+#define SPATIAL_FUNCTIONS(X) X(xrPollFutureEXT) X(xrCancelFutureEXT) X(xrEnumerateSpatialCapabilitiesEXT) \
+    X(xrEnumerateSpatialCapabilityComponentTypesEXT) X(xrEnumerateSpatialCapabilityFeaturesEXT) X(xrCreateSpatialContextAsyncEXT) \
+    X(xrCreateSpatialContextCompleteEXT) X(xrDestroySpatialContextEXT) X(xrCreateSpatialDiscoverySnapshotAsyncEXT) \
+    X(xrCreateSpatialDiscoverySnapshotCompleteEXT) X(xrQuerySpatialComponentDataEXT) X(xrDestroySpatialSnapshotEXT) \
+    X(xrCreateSpatialEntityFromIdEXT) X(xrDestroySpatialEntityEXT) X(xrCreateSpatialUpdateSnapshotEXT) \
+    X(xrGetSpatialBufferStringEXT) X(xrGetSpatialBufferUint8EXT) X(xrCreateSpatialAnchorEXT)
+#define SP_DECLARE(name) static PFN_##name sp_##name;
+SPATIAL_FUNCTIONS(SP_DECLARE)
+#undef SP_DECLARE
+
+static int spatial_functions(void)
+{
+#define SP_GET(name) if (xrGetInstanceProcAddr(in, #name, (PFN_xrVoidFunction *)&sp_##name) != XR_SUCCESS) { printf("  no %s\n", #name); return 1; }
+    SPATIAL_FUNCTIONS(SP_GET)
+#undef SP_GET
+    return 0;
+}
+
+// What a discovery or an update found: each entity's id, state, marker data, bounds and anchor location.
+#define FOUND_MAX 16
+struct found {
+    uint32_t n;
+    XrSpatialEntityIdEXT id[FOUND_MAX];
+    XrSpatialEntityTrackingStateEXT state[FOUND_MAX];
+    XrSpatialMarkerDataEXT marker[FOUND_MAX];
+    XrSpatialBounded2DDataEXT bounds[FOUND_MAX];
+    XrPosef anchor[FOUND_MAX];
+    char text[FOUND_MAX][64];   // a QR code's
+    bool ok;
+};
+
+// The snapshot's entities with the components named, and their data: `which` C-style flags, 1 marker,
+// 2 bounded, 4 anchor.
+static void query(XrSpatialSnapshotEXT snap, unsigned which, struct found *f)
+{
+    memset(f, 0, sizeof *f);
+    XrSpatialComponentTypeEXT types[3];
+    uint32_t nt = 0;
+    if (which & 1) types[nt++] = XR_SPATIAL_COMPONENT_TYPE_MARKER_EXT;
+    if (which & 2) types[nt++] = XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT;
+    if (which & 4) types[nt++] = XR_SPATIAL_COMPONENT_TYPE_ANCHOR_EXT;
+    const XrSpatialComponentDataQueryConditionEXT cond = { .type = XR_TYPE_SPATIAL_COMPONENT_DATA_QUERY_CONDITION_EXT,
+        .componentTypeCount = nt, .componentTypes = types };
+    XrSpatialComponentDataQueryResultEXT res = { .type = XR_TYPE_SPATIAL_COMPONENT_DATA_QUERY_RESULT_EXT };
+    if (sp_xrQuerySpatialComponentDataEXT(snap, &cond, &res) != XR_SUCCESS || res.entityIdCountOutput > FOUND_MAX) return;
+    const uint32_t n = res.entityIdCountOutput;
+    XrSpatialComponentMarkerListEXT ml = { .type = XR_TYPE_SPATIAL_COMPONENT_MARKER_LIST_EXT, .markerCount = n, .markers = f->marker };
+    XrSpatialComponentBounded2DListEXT bl = { .type = XR_TYPE_SPATIAL_COMPONENT_BOUNDED_2D_LIST_EXT, .boundCount = n, .bounds = f->bounds };
+    XrSpatialComponentAnchorListEXT al = { .type = XR_TYPE_SPATIAL_COMPONENT_ANCHOR_LIST_EXT, .locationCount = n, .locations = f->anchor };
+    // What the runtime leaves alone (the data of an entity not TRACKING) stays as this.
+    for (uint32_t i = 0; i < n; i++) {
+        f->bounds[i].extents.width = -1;
+        f->anchor[i].position.x = -999;
+    }
+    void *chain = NULL;
+    if (which & 1) { ml.next = chain; chain = &ml; }
+    if (which & 2) { bl.next = chain; chain = &bl; }
+    if (which & 4) { al.next = chain; chain = &al; }
+    res = (XrSpatialComponentDataQueryResultEXT){ .type = XR_TYPE_SPATIAL_COMPONENT_DATA_QUERY_RESULT_EXT, .next = chain,
+        .entityIdCapacityInput = n, .entityIds = f->id, .entityStateCapacityInput = n, .entityStates = f->state };
+    if (n > 0 && sp_xrQuerySpatialComponentDataEXT(snap, &cond, &res) != XR_SUCCESS) return;
+    f->n = n;
+    for (uint32_t i = 0; i < n; i++) {
+        if (!(which & 1) || f->marker[i].data.bufferType != XR_SPATIAL_BUFFER_TYPE_STRING_EXT) continue;
+        const XrSpatialBufferGetInfoEXT bgi = { .type = XR_TYPE_SPATIAL_BUFFER_GET_INFO_EXT, .bufferId = f->marker[i].data.bufferId };
+        uint32_t len = 0;
+        if (sp_xrGetSpatialBufferStringEXT(snap, &bgi, sizeof f->text[i], &len, f->text[i]) != XR_SUCCESS) return;
+    }
+    f->ok = true;
+}
+
+// A discovery, start to finish: the future polled, then completed.
+static XrSpatialSnapshotEXT discover(XrSpatialContextEXT ctx, XrSpace base, XrTime t)
+{
+    const XrSpatialDiscoverySnapshotCreateInfoEXT dci = { .type = XR_TYPE_SPATIAL_DISCOVERY_SNAPSHOT_CREATE_INFO_EXT };
+    XrFutureEXT fut = XR_NULL_FUTURE_EXT;
+    if (sp_xrCreateSpatialDiscoverySnapshotAsyncEXT(ctx, &dci, &fut) != XR_SUCCESS) return XR_NULL_HANDLE;
+    const XrFuturePollInfoEXT pi = { .type = XR_TYPE_FUTURE_POLL_INFO_EXT, .future = fut };
+    XrFuturePollResultEXT pr = { .type = XR_TYPE_FUTURE_POLL_RESULT_EXT };
+    if (sp_xrPollFutureEXT(in, &pi, &pr) != XR_SUCCESS || pr.state != XR_FUTURE_STATE_READY_EXT) return XR_NULL_HANDLE;
+    const XrCreateSpatialDiscoverySnapshotCompletionInfoEXT cci = { .type = XR_TYPE_CREATE_SPATIAL_DISCOVERY_SNAPSHOT_COMPLETION_INFO_EXT,
+        .baseSpace = base, .time = t, .future = fut };
+    XrCreateSpatialDiscoverySnapshotCompletionEXT cc = { .type = XR_TYPE_CREATE_SPATIAL_DISCOVERY_SNAPSHOT_COMPLETION_EXT };
+    if (sp_xrCreateSpatialDiscoverySnapshotCompleteEXT(ctx, &cci, &cc) != XR_SUCCESS || cc.futureResult != XR_SUCCESS) return XR_NULL_HANDLE;
+    return cc.snapshot;
+}
+
+static int index_of(const struct found *f, XrSpatialCapabilityEXT cap)
+{
+    for (uint32_t i = 0; i < f->n; i++)
+        if (f->marker[i].capability == cap) return (int)i;
+    return -1;
+}
+
+static int index_of_id(const struct found *f, XrSpatialEntityIdEXT id)
+{
+    for (uint32_t i = 0; i < f->n; i++)
+        if (f->id[i] == id) return (int)i;
+    return -1;
+}
+
+static bool near3(XrVector3f a, float x, float y, float z) { return fabsf(a.x - x) < 0.001f && fabsf(a.y - y) < 0.001f && fabsf(a.z - z) < 0.001f; }
+
+// The capabilities and what is wrong with a configuration, before the context the test uses is made.
+static void spatial_capabilities(XrSystemId sys, XrSession session)
+{
+    XrSpatialCapabilityEXT caps[8];
+    uint32_t n = 0;
+    check(sp_xrEnumerateSpatialCapabilitiesEXT(in, sys, 8, &n, caps) == XR_SUCCESS && n == 5, "five capabilities: four kinds of marker and anchors");
+    XrSpatialComponentTypeEXT comps[4];
+    XrSpatialCapabilityComponentTypesEXT ct = { .type = XR_TYPE_SPATIAL_CAPABILITY_COMPONENT_TYPES_EXT, .componentTypeCapacityInput = 4, .componentTypes = comps };
+    check(sp_xrEnumerateSpatialCapabilityComponentTypesEXT(in, sys, XR_SPATIAL_CAPABILITY_MARKER_TRACKING_QR_CODE_EXT, &ct) == XR_SUCCESS &&
+          ct.componentTypeCountOutput == 2, "a QR code has the marker and bounded 2D components");
+    check(sp_xrEnumerateSpatialCapabilityComponentTypesEXT(in, sys, XR_SPATIAL_CAPABILITY_ANCHOR_EXT, &ct) == XR_SUCCESS &&
+          ct.componentTypeCountOutput == 1 && comps[0] == XR_SPATIAL_COMPONENT_TYPE_ANCHOR_EXT, "an anchor has the anchor component");
+    check(sp_xrEnumerateSpatialCapabilityComponentTypesEXT(in, sys, XR_SPATIAL_CAPABILITY_PLANE_TRACKING_EXT, &ct) ==
+          XR_ERROR_SPATIAL_CAPABILITY_UNSUPPORTED_EXT, "no plane tracking");
+
+    const XrSpatialComponentTypeEXT marker_comps[] = { XR_SPATIAL_COMPONENT_TYPE_MARKER_EXT, XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT };
+    const XrSpatialComponentTypeEXT anchor_comp[] = { XR_SPATIAL_COMPONENT_TYPE_ANCHOR_EXT };
+    XrSpatialCapabilityConfigurationQrCodeEXT qr = { .type = XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_QR_CODE_EXT,
+        .capability = XR_SPATIAL_CAPABILITY_MARKER_TRACKING_QR_CODE_EXT, .enabledComponentCount = 2, .enabledComponents = marker_comps };
+    XrSpatialCapabilityConfigurationQrCodeEXT qr_anchor = qr;
+    qr_anchor.enabledComponentCount = 1;
+    qr_anchor.enabledComponents = anchor_comp;
+    XrSpatialCapabilityConfigurationPlaneTrackingEXT plane = { .type = XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_PLANE_TRACKING_EXT,
+        .capability = XR_SPATIAL_CAPABILITY_PLANE_TRACKING_EXT, .enabledComponentCount = 1, .enabledComponents = marker_comps + 1 };
+    XrSpatialCapabilityConfigurationArucoMarkerEXT aruco_bad = { .type = XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_ARUCO_MARKER_EXT,
+        .capability = XR_SPATIAL_CAPABILITY_MARKER_TRACKING_ARUCO_MARKER_EXT, .enabledComponentCount = 2, .enabledComponents = marker_comps,
+        .arUcoDict = 99 };
+    const XrSpatialCapabilityConfigurationBaseHeaderEXT *twice[] = { (const void *)&qr, (const void *)&qr };
+    const XrSpatialCapabilityConfigurationBaseHeaderEXT *wrong_comp[] = { (const void *)&qr_anchor };
+    const XrSpatialCapabilityConfigurationBaseHeaderEXT *planes[] = { (const void *)&plane };
+    const XrSpatialCapabilityConfigurationBaseHeaderEXT *bad_dict[] = { (const void *)&aruco_bad };
+    XrSpatialContextCreateInfoEXT sci = { .type = XR_TYPE_SPATIAL_CONTEXT_CREATE_INFO_EXT };
+    XrFutureEXT fut;
+    check(sp_xrCreateSpatialContextAsyncEXT(session, &sci, &fut) == XR_ERROR_SPATIAL_CAPABILITY_CONFIGURATION_INVALID_EXT, "a context of no capability is refused");
+    sci.capabilityConfigCount = 2; sci.capabilityConfigs = twice;
+    check(sp_xrCreateSpatialContextAsyncEXT(session, &sci, &fut) == XR_ERROR_SPATIAL_CAPABILITY_CONFIGURATION_INVALID_EXT, "a capability twice is refused");
+    sci.capabilityConfigCount = 1; sci.capabilityConfigs = wrong_comp;
+    check(sp_xrCreateSpatialContextAsyncEXT(session, &sci, &fut) == XR_ERROR_SPATIAL_COMPONENT_UNSUPPORTED_FOR_CAPABILITY_EXT, "a QR code with an anchor component is refused");
+    sci.capabilityConfigs = planes;
+    check(sp_xrCreateSpatialContextAsyncEXT(session, &sci, &fut) == XR_ERROR_SPATIAL_CAPABILITY_UNSUPPORTED_EXT, "plane tracking is refused");
+    sci.capabilityConfigs = bad_dict;
+    check(sp_xrCreateSpatialContextAsyncEXT(session, &sci, &fut) == XR_ERROR_VALIDATION_FAILURE, "an ArUco dictionary that is none is refused");
+}
+
+// The context the test uses: every marker kind (ArUco 4x4_50, AprilTag 36h11) and anchors.
+static XrSpatialContextEXT spatial_context(XrSession session)
+{
+    const XrSpatialComponentTypeEXT marker_comps[] = { XR_SPATIAL_COMPONENT_TYPE_MARKER_EXT, XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT };
+    const XrSpatialComponentTypeEXT anchor_comp[] = { XR_SPATIAL_COMPONENT_TYPE_ANCHOR_EXT };
+    const XrSpatialCapabilityConfigurationQrCodeEXT qr = { .type = XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_QR_CODE_EXT,
+        .capability = XR_SPATIAL_CAPABILITY_MARKER_TRACKING_QR_CODE_EXT, .enabledComponentCount = 2, .enabledComponents = marker_comps };
+    const XrSpatialCapabilityConfigurationMicroQrCodeEXT micro = { .type = XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_MICRO_QR_CODE_EXT,
+        .capability = XR_SPATIAL_CAPABILITY_MARKER_TRACKING_MICRO_QR_CODE_EXT, .enabledComponentCount = 2, .enabledComponents = marker_comps };
+    const XrSpatialCapabilityConfigurationArucoMarkerEXT aruco = { .type = XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_ARUCO_MARKER_EXT,
+        .capability = XR_SPATIAL_CAPABILITY_MARKER_TRACKING_ARUCO_MARKER_EXT, .enabledComponentCount = 2, .enabledComponents = marker_comps,
+        .arUcoDict = XR_SPATIAL_MARKER_ARUCO_DICT_4X4_50_EXT };
+    const XrSpatialCapabilityConfigurationAprilTagEXT april = { .type = XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_APRIL_TAG_EXT,
+        .capability = XR_SPATIAL_CAPABILITY_MARKER_TRACKING_APRIL_TAG_EXT, .enabledComponentCount = 2, .enabledComponents = marker_comps,
+        .aprilDict = XR_SPATIAL_MARKER_APRIL_TAG_DICT_36H11_EXT };
+    const XrSpatialCapabilityConfigurationAnchorEXT anchor = { .type = XR_TYPE_SPATIAL_CAPABILITY_CONFIGURATION_ANCHOR_EXT,
+        .capability = XR_SPATIAL_CAPABILITY_ANCHOR_EXT, .enabledComponentCount = 1, .enabledComponents = anchor_comp };
+    const XrSpatialCapabilityConfigurationBaseHeaderEXT *all[] = { (const void *)&qr, (const void *)&micro, (const void *)&aruco,
+                                                                 (const void *)&april, (const void *)&anchor };
+    const XrSpatialContextCreateInfoEXT sci = { .type = XR_TYPE_SPATIAL_CONTEXT_CREATE_INFO_EXT, .capabilityConfigCount = 5, .capabilityConfigs = all };
+    XrFutureEXT fut = XR_NULL_FUTURE_EXT;
+    check(sp_xrCreateSpatialContextAsyncEXT(session, &sci, &fut) == XR_SUCCESS && fut != XR_NULL_FUTURE_EXT, "a context for every marker and anchors");
+    XrCreateSpatialContextCompletionEXT cc = { .type = XR_TYPE_CREATE_SPATIAL_CONTEXT_COMPLETION_EXT };
+    check(sp_xrCreateSpatialContextCompleteEXT(session, fut, &cc) == XR_SUCCESS && cc.futureResult == XR_SUCCESS, "its future completed");
+    check(sp_xrCreateSpatialContextCompleteEXT(session, fut, &cc) == XR_ERROR_FUTURE_INVALID_EXT, "and is gone once completed");
+    const XrFuturePollInfoEXT pi = { .type = XR_TYPE_FUTURE_POLL_INFO_EXT, .future = fut };
+    XrFuturePollResultEXT pr = { .type = XR_TYPE_FUTURE_POLL_RESULT_EXT };
+    check(sp_xrPollFutureEXT(in, &pi, &pr) == XR_ERROR_FUTURE_INVALID_EXT, "a completed future cannot be polled");
+    return cc.futureResult == XR_SUCCESS ? cc.spatialContext : XR_NULL_HANDLE;
+}
+
+// BEFORE THE TURN: the QR code, the Micro QR code and the ArUco marker ahead; not the AprilTag on the left.
+// And an anchor made a metre to the right and ahead; another in a space turned and moved from STAGE.
+struct spatial_state {
+    XrSpatialContextEXT ctx;
+    bool first_done, second_done, recommended_after_first;
+    XrSpatialEntityIdEXT qr, micro, aruco, anchor;
+    XrSpatialEntityEXT qr_e, micro_e, aruco_e, anchor_e, anchor_again;
+};
+
+// In a space turned 90 degrees to the left of STAGE and 1 m right, 2 m back: an anchor made at (0, 1, -1)
+// is at (0, 1, 2) in STAGE, and the QR code at (0, 1.5, -2) in STAGE is at (4, 1.5, -1) in it.
+static void spatial_turned(struct spatial_state *st, XrSession session, XrSpace stage, XrTime t)
+{
+    const float h = 0.70710678f;
+    const XrReferenceSpaceCreateInfo rsi = { .type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO, .referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE,
+        .poseInReferenceSpace = { { 0, h, 0, h }, { 1, 0, 2 } } };
+    XrSpace turned = XR_NULL_HANDLE;
+    SPX(xrCreateReferenceSpace(session, &rsi, &turned));
+    const XrSpatialAnchorCreateInfoEXT aci = { .type = XR_TYPE_SPATIAL_ANCHOR_CREATE_INFO_EXT, .baseSpace = turned, .time = t,
+        .pose = { { 0, 0, 0, 1 }, { 0, 1, -1 } } };
+    XrSpatialEntityIdEXT id = 0;
+    XrSpatialEntityEXT e = XR_NULL_HANDLE;
+    check(sp_xrCreateSpatialAnchorEXT(st->ctx, &aci, &id, &e) == XR_SUCCESS, "an anchor made in a turned space");
+    XrSpatialSnapshotEXT snap = discover(st->ctx, stage, t);
+    struct found an, f;
+    query(snap, 4, &an);
+    const int i = index_of_id(&an, id);
+    check(i >= 0 && near3(an.anchor[i].position, 0, 1, 2), "it is where that space puts it in STAGE");
+    check(i >= 0 && fabs(yaw_of(an.anchor[i].orientation) - 90) < 0.1, "and turned as that space is");
+    SPX(sp_xrDestroySpatialSnapshotEXT(snap));
+    snap = discover(st->ctx, turned, t);
+    query(snap, 3, &f);
+    const int q = index_of(&f, XR_SPATIAL_CAPABILITY_MARKER_TRACKING_QR_CODE_EXT);
+    check(q >= 0 && near3(f.bounds[q].center.position, 4, 1.5f, -1), "the QR code where it is in the turned space");
+    SPX(sp_xrDestroySpatialSnapshotEXT(snap));
+    SPX(sp_xrDestroySpatialEntityEXT(e));   // and gone, so that the discoveries after find only the first anchor
+    SPX(xrDestroySpace(turned));
+}
+
+static void spatial_first(struct spatial_state *st, XrSession session, XrSpace stage, XrTime t)
+{
+    st->first_done = true;
+    XrSpatialSnapshotEXT snap = discover(st->ctx, stage, t);
+    check(snap != XR_NULL_HANDLE, "the first discovery");
+    if (snap == XR_NULL_HANDLE) return;
+    struct found f;
+    query(snap, 3, &f);
+    const int q = index_of(&f, XR_SPATIAL_CAPABILITY_MARKER_TRACKING_QR_CODE_EXT);
+    const int mq = index_of(&f, XR_SPATIAL_CAPABILITY_MARKER_TRACKING_MICRO_QR_CODE_EXT);
+    const int a = index_of(&f, XR_SPATIAL_CAPABILITY_MARKER_TRACKING_ARUCO_MARKER_EXT);
+    printf("  before the turn: %u markers seen\n", f.n);
+    check(f.ok && f.n == 3 && q >= 0 && mq >= 0 && a >= 0, "before the turn: the QR, Micro QR and ArUco markers, not the AprilTag");
+    check(q >= 0 && strcmp(f.text[q], "openxr-sim") == 0 && f.marker[q].markerId == 0, "the QR code says \"openxr-sim\"");
+    check(q >= 0 && near3(f.bounds[q].center.position, 0, 1.5f, -2) && fabsf(f.bounds[q].extents.width - 0.2f) < 1e-5f &&
+          fabsf(f.bounds[q].extents.height - 0.2f) < 1e-5f, "on the wall 2 m ahead, 20 cm square");
+    check(a >= 0 && f.marker[a].markerId == 7 && f.marker[a].data.bufferId == XR_NULL_SPATIAL_BUFFER_ID_EXT, "the ArUco marker is number 7, with no buffer");
+    // Its face up: the marker's +Z is STAGE's +Y.
+    const XrVector3f up = a >= 0 ? rotate(f.bounds[a].center.orientation, (XrVector3f){ 0, 0, 1 }) : (XrVector3f){ 0, 0, 0 };
+    check(up.y > 0.999f, "the ArUco marker lies face up");
+    XrSpatialBufferGetInfoEXT bgi = { .type = XR_TYPE_SPATIAL_BUFFER_GET_INFO_EXT, .bufferId = q >= 0 ? f.marker[q].data.bufferId : 0 };
+    uint32_t len = 0;
+    uint8_t bytes[64];
+    check(sp_xrGetSpatialBufferUint8EXT(snap, &bgi, sizeof bytes, &len, bytes) == XR_ERROR_VALIDATION_FAILURE, "a string buffer is not bytes");
+    bgi.bufferId = 0x7777;
+    char text[8];
+    check(sp_xrGetSpatialBufferStringEXT(snap, &bgi, sizeof text, &len, text) == XR_ERROR_SPATIAL_BUFFER_ID_INVALID_EXT, "a buffer that is none");
+    // A list for a component the condition does not name.
+    const XrSpatialComponentTypeEXT only_marker = XR_SPATIAL_COMPONENT_TYPE_MARKER_EXT;
+    const XrSpatialComponentDataQueryConditionEXT cond = { .type = XR_TYPE_SPATIAL_COMPONENT_DATA_QUERY_CONDITION_EXT,
+        .componentTypeCount = 1, .componentTypes = &only_marker };
+    XrSpatialBounded2DDataEXT b[8];
+    XrSpatialComponentBounded2DListEXT bl = { .type = XR_TYPE_SPATIAL_COMPONENT_BOUNDED_2D_LIST_EXT, .boundCount = 8, .bounds = b };
+    XrSpatialEntityIdEXT ids[8];
+    XrSpatialComponentDataQueryResultEXT res = { .type = XR_TYPE_SPATIAL_COMPONENT_DATA_QUERY_RESULT_EXT, .next = &bl, .entityIdCapacityInput = 8, .entityIds = ids };
+    check(sp_xrQuerySpatialComponentDataEXT(snap, &cond, &res) == XR_ERROR_VALIDATION_FAILURE, "a list the condition does not name is refused");
+    bl.boundCount = 1;
+    res.next = &bl;
+    const XrSpatialComponentDataQueryConditionEXT all = { .type = XR_TYPE_SPATIAL_COMPONENT_DATA_QUERY_CONDITION_EXT };
+    check(sp_xrQuerySpatialComponentDataEXT(snap, &all, &res) == XR_ERROR_SIZE_INSUFFICIENT, "a list shorter than the entities is refused");
+    SPX(sp_xrDestroySpatialSnapshotEXT(snap));
+
+    st->qr = q >= 0 ? f.id[q] : 0;
+    st->micro = mq >= 0 ? f.id[mq] : 0;
+    st->aruco = a >= 0 ? f.id[a] : 0;
+    XrSpatialEntityFromIdCreateInfoEXT eci = { .type = XR_TYPE_SPATIAL_ENTITY_FROM_ID_CREATE_INFO_EXT, .entityId = st->qr };
+    check(sp_xrCreateSpatialEntityFromIdEXT(st->ctx, &eci, &st->qr_e) == XR_SUCCESS, "the QR code's entity");
+    eci.entityId = st->micro;
+    check(sp_xrCreateSpatialEntityFromIdEXT(st->ctx, &eci, &st->micro_e) == XR_SUCCESS, "the Micro QR code's entity");
+    eci.entityId = st->aruco;
+    check(sp_xrCreateSpatialEntityFromIdEXT(st->ctx, &eci, &st->aruco_e) == XR_SUCCESS, "the ArUco marker's entity");
+    eci.entityId = 0x123456789;
+    XrSpatialEntityEXT none;
+    check(sp_xrCreateSpatialEntityFromIdEXT(st->ctx, &eci, &none) == XR_ERROR_SPATIAL_ENTITY_ID_INVALID_EXT, "an id never discovered is refused");
+
+    XrSpatialAnchorCreateInfoEXT aci = { .type = XR_TYPE_SPATIAL_ANCHOR_CREATE_INFO_EXT, .baseSpace = stage, .time = t,
+        .pose = { { 0, 0, 0, 1 }, { 1, 1, -1 } } };
+    check(sp_xrCreateSpatialAnchorEXT(st->ctx, &aci, &st->anchor, &st->anchor_e) == XR_SUCCESS && st->anchor != 0, "an anchor made");
+    aci.pose.orientation.w = 0;
+    XrSpatialEntityIdEXT bad_id;
+    check(sp_xrCreateSpatialAnchorEXT(st->ctx, &aci, &bad_id, &none) == XR_ERROR_POSE_INVALID, "an anchor of no orientation is refused");
+    eci.entityId = st->anchor;
+    check(sp_xrCreateSpatialEntityFromIdEXT(st->ctx, &eci, &st->anchor_again) == XR_SUCCESS, "a second handle to the anchor");
+    spatial_turned(st, session, stage, t);
+
+    // A discovery cancelled.
+    const XrSpatialDiscoverySnapshotCreateInfoEXT dci = { .type = XR_TYPE_SPATIAL_DISCOVERY_SNAPSHOT_CREATE_INFO_EXT };
+    XrFutureEXT fut;
+    SPX(sp_xrCreateSpatialDiscoverySnapshotAsyncEXT(st->ctx, &dci, &fut));
+    const XrFutureCancelInfoEXT cancel = { .type = XR_TYPE_FUTURE_CANCEL_INFO_EXT, .future = fut };
+    SPX(sp_xrCancelFutureEXT(in, &cancel));
+    const XrCreateSpatialDiscoverySnapshotCompletionInfoEXT cci = { .type = XR_TYPE_CREATE_SPATIAL_DISCOVERY_SNAPSHOT_COMPLETION_INFO_EXT,
+        .baseSpace = stage, .time = t, .future = fut };
+    XrCreateSpatialDiscoverySnapshotCompletionEXT cc = { .type = XR_TYPE_CREATE_SPATIAL_DISCOVERY_SNAPSHOT_COMPLETION_EXT };
+    check(sp_xrCreateSpatialDiscoverySnapshotCompleteEXT(st->ctx, &cci, &cc) == XR_ERROR_FUTURE_INVALID_EXT, "a cancelled discovery cannot be completed");
+    const XrSpatialComponentTypeEXT plane = XR_SPATIAL_COMPONENT_TYPE_PLANE_ALIGNMENT_EXT;
+    const XrSpatialDiscoverySnapshotCreateInfoEXT bad = { .type = XR_TYPE_SPATIAL_DISCOVERY_SNAPSHOT_CREATE_INFO_EXT, .componentTypeCount = 1, .componentTypes = &plane };
+    check(sp_xrCreateSpatialDiscoverySnapshotAsyncEXT(st->ctx, &bad, &fut) == XR_ERROR_SPATIAL_COMPONENT_NOT_ENABLED_EXT, "a component not enabled is refused");
+}
+
+// AFTER THE TURN: the AprilTag in view and discovered, the anchor with it; the Micro QR code out of view on
+// the right, PAUSED; the ArUco marker taken away, STOPPED.
+static void spatial_second(struct spatial_state *st, XrSpace stage, XrTime t)
+{
+    st->second_done = true;
+    check(st->recommended_after_first, "a discovery recommended once the AprilTag came into view");
+    XrSpatialSnapshotEXT snap = discover(st->ctx, stage, t);
+    check(snap != XR_NULL_HANDLE, "the second discovery");
+    if (snap == XR_NULL_HANDLE) return;
+    struct found f, an;
+    query(snap, 1, &f);
+    const int tag = index_of(&f, XR_SPATIAL_CAPABILITY_MARKER_TRACKING_APRIL_TAG_EXT);
+    printf("  after the turn: %u markers seen\n", f.n);
+    check(tag >= 0 && f.marker[tag].markerId == 3, "after the turn: the AprilTag, number 3");
+    check(index_of(&f, XR_SPATIAL_CAPABILITY_MARKER_TRACKING_MICRO_QR_CODE_EXT) < 0, "not the Micro QR code, out of view");
+    check(index_of(&f, XR_SPATIAL_CAPABILITY_MARKER_TRACKING_ARUCO_MARKER_EXT) < 0, "nor the ArUco marker, taken away");
+    check(index_of_id(&f, st->qr) >= 0, "the QR code again, by the same id");
+    query(snap, 4, &an);
+    const int ai = index_of_id(&an, st->anchor);
+    check(an.ok && an.n == 1 && ai == 0 && near3(an.anchor[0].position, 1, 1, -1), "the anchor discovered where it was made");
+    SPX(sp_xrDestroySpatialSnapshotEXT(snap));
+
+    const XrSpatialEntityEXT ents[] = { st->qr_e, st->micro_e, st->aruco_e, st->anchor_again };
+    const XrSpatialUpdateSnapshotCreateInfoEXT uci = { .type = XR_TYPE_SPATIAL_UPDATE_SNAPSHOT_CREATE_INFO_EXT, .entityCount = 4,
+        .entities = ents, .baseSpace = stage, .time = t };
+    XrSpatialSnapshotEXT up = XR_NULL_HANDLE;
+    check(sp_xrCreateSpatialUpdateSnapshotEXT(st->ctx, &uci, &up) == XR_SUCCESS, "an update of the QR code, the Micro QR code, the ArUco marker and the anchor");
+    struct found u, ua;
+    query(up, 3, &u);
+    const int q = index_of_id(&u, st->qr), m = index_of_id(&u, st->micro), r = index_of_id(&u, st->aruco);
+    check(u.ok && u.n == 3 && q >= 0 && m >= 0 && r >= 0, "the three markers in it");
+    check(q >= 0 && u.state[q] == XR_SPATIAL_ENTITY_TRACKING_STATE_TRACKING_EXT && near3(u.bounds[q].center.position, 0, 1.5f, -2),
+          "the QR code TRACKING, where it was");
+    check(m >= 0 && u.state[m] == XR_SPATIAL_ENTITY_TRACKING_STATE_PAUSED_EXT, "the Micro QR code PAUSED, out of view");
+    check(m >= 0 && u.bounds[m].extents.width == -1, "and its bounds left alone");
+    check(r >= 0 && u.state[r] == XR_SPATIAL_ENTITY_TRACKING_STATE_STOPPED_EXT, "the ArUco marker STOPPED, taken away");
+    query(up, 4, &ua);
+    check(ua.ok && ua.n == 1 && ua.id[0] == st->anchor && ua.state[0] == XR_SPATIAL_ENTITY_TRACKING_STATE_TRACKING_EXT &&
+          near3(ua.anchor[0].position, 1, 1, -1), "the anchor TRACKING, where it was made");
+    SPX(sp_xrDestroySpatialSnapshotEXT(up));
+
+    SPX(sp_xrDestroySpatialEntityEXT(st->anchor_e));   // the anchor goes with the handle it was made with
+    const XrSpatialUpdateSnapshotCreateInfoEXT uci2 = { .type = XR_TYPE_SPATIAL_UPDATE_SNAPSHOT_CREATE_INFO_EXT, .entityCount = 1,
+        .entities = &st->anchor_again, .baseSpace = stage, .time = t };
+    up = XR_NULL_HANDLE;
+    check(sp_xrCreateSpatialUpdateSnapshotEXT(st->ctx, &uci2, &up) == XR_SUCCESS, "an update of the anchor by its other handle");
+    query(up, 0, &ua);
+    check(ua.ok && ua.n == 1 && ua.state[0] == XR_SPATIAL_ENTITY_TRACKING_STATE_STOPPED_EXT, "the anchor STOPPED, its handle destroyed");
+    SPX(sp_xrDestroySpatialSnapshotEXT(up));
+    SPX(sp_xrDestroySpatialContextEXT(st->ctx));
+    check(sp_xrDestroySpatialEntityEXT(st->qr_e) == XR_ERROR_HANDLE_INVALID, "the context's entities go with it");
+}
+
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
@@ -473,6 +834,7 @@ int main(int argc, char **argv)
         layers |= strcmp(argv[i], "--layers") == 0;
         hands |= strcmp(argv[i], "--hands") == 0;
         hand_interaction |= strcmp(argv[i], "--hand-interaction") == 0;
+        spatial |= strcmp(argv[i], "--spatial") == 0;
         if (strcmp(argv[i], "--d3d11") == 0) d3d = 11;
         if (strcmp(argv[i], "--d3d12") == 0) d3d = 12;
     }
@@ -480,7 +842,7 @@ int main(int argc, char **argv)
     if (d3d != 0) { printf("  Direct3D is Windows'\n"); return 2; }
 #endif
     gl |= win32;
-    const char *exts[8] = { d3d == 11 ? "XR_KHR_D3D11_enable" : d3d == 12 ? "XR_KHR_D3D12_enable"
+    const char *exts[12] = { d3d == 11 ? "XR_KHR_D3D11_enable" : d3d == 12 ? "XR_KHR_D3D12_enable"
                             : gl ? XR_KHR_OPENGL_ENABLE_EXTENSION_NAME : XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME };
     uint32_t nexts = 1;
     if (gl) exts[nexts++] = XR_MNDX_EGL_ENABLE_EXTENSION_NAME;
@@ -490,10 +852,16 @@ int main(int argc, char **argv)
     }
     if (hands) exts[nexts++] = XR_EXT_HAND_TRACKING_EXTENSION_NAME;
     if (hand_interaction) exts[nexts++] = XR_EXT_HAND_INTERACTION_EXTENSION_NAME;
+    if (spatial) {
+        exts[nexts++] = XR_EXT_FUTURE_EXTENSION_NAME;
+        exts[nexts++] = XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME;
+        exts[nexts++] = XR_EXT_SPATIAL_MARKER_TRACKING_EXTENSION_NAME;
+        exts[nexts++] = XR_EXT_SPATIAL_ANCHOR_EXTENSION_NAME;
+    }
     XrInstanceCreateInfo ci = { .type = XR_TYPE_INSTANCE_CREATE_INFO, .enabledExtensionCount = nexts, .enabledExtensionNames = exts };
-    snprintf(ci.applicationInfo.applicationName, sizeof ci.applicationInfo.applicationName, "%s%s%s%s",
+    snprintf(ci.applicationInfo.applicationName, sizeof ci.applicationInfo.applicationName, "%s%s%s%s%s",
              d3d == 11 ? "sim-test-d3d11" : d3d == 12 ? "sim-test-d3d12" : win32 ? "sim-test-win32" : gl ? "sim-test-gl" : "sim-test", layers ? "-layers" : "", hands ? "-hands" : "",
-             hand_interaction ? "-interaction" : "");
+             hand_interaction ? "-interaction" : "", spatial ? "-spatial" : "");
     ci.applicationInfo.apiVersion = XR_API_VERSION_1_0;
 #ifdef OXS_DIRECT
     if (direct_open() != 0) return 1;
@@ -507,6 +875,14 @@ int main(int argc, char **argv)
     XrResult r = xrGetSystem(in, &gi, &sys);
     check(r == XR_SUCCESS, "a headset: the simulated one");
     if (r != XR_SUCCESS) return 1;
+
+    // SPATIAL ENTITIES are there only when enabled, and need what they build on.
+    {
+        PFN_xrVoidFunction f = NULL;
+        r = xrGetInstanceProcAddr(in, "xrCreateSpatialContextAsyncEXT", &f);
+        if (!spatial) check(r == XR_ERROR_FUNCTION_UNSUPPORTED, "no spatial entities unless they are enabled");
+        else if (spatial_functions() != 0) return 1;
+    }
 
     // HAND TRACKING is there only when enabled.
     PFN_xrCreateHandTrackerEXT create_tracker = NULL;
@@ -718,6 +1094,12 @@ int main(int argc, char **argv)
         XrHandTrackerEXT none;
         check(create_tracker(session, &bad, &none) == XR_ERROR_VALIDATION_FAILURE, "a hand tracker for no hand is refused");
     }
+    struct spatial_state sst = { 0 };
+    if (spatial) {
+        spatial_capabilities(sys, session);
+        sst.ctx = spatial_context(session);
+        if (sst.ctx == XR_NULL_HANDLE) return 1;
+    }
     // The joints and grips as last located once the scripted move had arrived.
     XrHandJointLocationEXT joint[2][XR_HAND_JOINT_COUNT_EXT];
     XrHandJointVelocityEXT joint_velocity[2][XR_HAND_JOINT_COUNT_EXT];
@@ -781,6 +1163,9 @@ int main(int argc, char **argv)
                 } else if (s == XR_SESSION_STATE_EXITING || s == XR_SESSION_STATE_LOSS_PENDING) {
                     done = true;
                 }
+            } else if (ev.type == XR_TYPE_EVENT_DATA_SPATIAL_DISCOVERY_RECOMMENDED_EXT) {
+                const XrEventDataSpatialDiscoveryRecommendedEXT *d = (const XrEventDataSpatialDiscoveryRecommendedEXT *)&ev;
+                if (d->spatialContext == sst.ctx && sst.first_done) sst.recommended_after_first = true;
             } else if (ev.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
                 XrInteractionProfileState ips = { .type = XR_TYPE_INTERACTION_PROFILE_STATE };
                 if (xrGetCurrentInteractionProfile(session, path("/user/hand/right"), &ips) == XR_SUCCESS && ips.interactionProfile != XR_NULL_PATH) {
@@ -818,6 +1203,12 @@ int main(int argc, char **argv)
             XR(xrGetActionStateBoolean(session, &agi, &ab));
             saw_a |= ab.isActive && ab.currentState;
         }
+
+        // Markers before the head turn (the first frame, before the simulator has made it) and after it, once the
+        // discovery it recommends has been polled -- or five seconds on, when it is overdue.
+        if (spatial && !sst.first_done && !saw_turn) spatial_first(&sst, session, stage, fs.predictedDisplayTime);
+        if (spatial && sst.first_done && !sst.second_done && saw_turn && (sst.recommended_after_first || frames > 360))
+            spatial_second(&sst, stage, fs.predictedDisplayTime);
 
         if ((hands || hand_interaction) && saw_trigger && saw_a && saw_turn) {
             for (int h = 0; h < 2; h++) {
@@ -897,7 +1288,7 @@ int main(int argc, char **argv)
         XR(xrEndFrame(session, &fei));
         frames++;
         // Done once the scripted move has arrived, or after ten seconds of frames regardless.
-        if (!exiting && ((saw_trigger && saw_a && saw_turn && frames > 30) || frames > 720)) {
+        if (!exiting && ((saw_trigger && saw_a && saw_turn && frames > 30 && (!spatial || sst.second_done)) || frames > 720)) {
             XR(xrRequestExitSession(session));
             exiting = true;
         }
@@ -909,6 +1300,7 @@ int main(int argc, char **argv)
     check(saw_trigger, hand_interaction ? "the right trigger reached the pinch's value" : "the right trigger reached the float action");
     check(saw_a, hand_interaction ? "the right pinch is ready" : "A reached the boolean action");
     printf("  frames %d, last yaw %.1f\n", frames, yaw);
+    if (spatial) check(sst.first_done && sst.second_done, "markers looked for before and after the turn");
 
     if (hands) {
         check(located, "the hands were located after the scripted move");

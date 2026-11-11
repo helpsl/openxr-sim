@@ -16,7 +16,10 @@ It began as LOS's runtime (`apps/los-openxr`) and is its own project since 0.7.0
 * Composition layers: projection, quad, cylinder, equirect (2), each composited where it belongs.
 * Touch-style controllers by any profile the application suggests; `XR_EXT_hand_tracking` and
   `XR_EXT_hand_interaction` with hands that follow the controllers.
-* A control socket and `openxr-sim-mcp`, an MCP server: see both eyes, set and move poses, hold buttons.
+* `XR_EXT_spatial_entity` with `XR_EXT_spatial_marker_tracking` (QR, Micro QR, ArUco and AprilTag codes
+  printed round a simulated room, found when the headset looks at them) and `XR_EXT_spatial_anchor`.
+* A control socket and `openxr-sim-mcp`, an MCP server: see both eyes, set and move poses, hold buttons,
+  put markers up and take them down.
 
 `docs/DESIGN.md` says how it works and why; `docs/NOTES.md` is what was found out on the way.
 
@@ -32,7 +35,7 @@ Then run `openxr-sim` and choose "Make this the active runtime" (below).
 ## Building
 
 Linux, with CMake 3.21+, a C11 and C++23 compiler, and the development files of: the OpenXR SDK
-(`openxr`), Vulkan headers, GLFW 3.4+, fontconfig, libdbus-1 and wayland-client (the desktop's look and frame), jsoncpp (for the MCP server), EGL (for the tests).
+(`openxr`, 1.1.49 or newer: its headers have the spatial entity extensions), Vulkan headers, GLFW 3.4+, fontconfig, libdbus-1 and wayland-client (the desktop's look and frame), jsoncpp (for the MCP server), EGL (for the tests).
 
     cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
     ninja -C build

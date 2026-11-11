@@ -3,6 +3,7 @@
 #include "app.hpp"
 
 #include "os.hpp"
+#include "xrmath.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -154,6 +155,7 @@ bool set_configured_device(const std::string& device, std::string* error) {
 App::App(std::string app_name) : app_name_(std::move(app_name)) {
     use_sim_ = configured_device() == "sim";
     runtime_ = runtime_state();
+    oxs_room_home(&room_);
 }
 
 App::~App() {
@@ -347,6 +349,7 @@ void App::build_panel(float w, float h) {
     }
     build_hand(1);
     build_hand(0);
+    build_markers(inner);
     {
         Card card;
         caps("Keys");
@@ -384,6 +387,28 @@ void App::build_hand(int hand) {
             const PanelButton& b = kPanelButtons[i];
             push_button("hold", k * 16 + static_cast<uint32_t>(i), hand == 1 ? b.right : b.left, (held & b.control) != 0);
         }
+    }
+}
+
+// THE ROOM'S MARKERS, and which of them the headset sees now -- what an application tracking them finds.
+void App::build_markers(float inner) {
+    const Theme& t = theme();
+    Card card;
+    caps("Markers in the room");
+    if (room_.count == 0) text("None: the control socket's add-marker puts one up.", Role::Secondary, t.dim, { .wrap = true });
+    const oxs_pose head = rig_.tracking().head;
+    for (uint32_t i = 0; i < room_.count; i++) {
+        const oxs_marker& m = room_.marker[i];
+        Style line;
+        line.w = Size::grow();
+        line.row = true;
+        line.gap = px(Space::S);
+        line.align_y = CLAY_ALIGN_Y_CENTER;
+        Box l(line);
+        text(marker_name(m), Role::Secondary, t.text, { .elide_at = inner - 96 });
+        filler();
+        const bool seen = oxs_marker_seen(&head, &m);
+        badge(seen ? "In view" : "Out of view", seen ? Tone::Success : Tone::Neutral, seen);
     }
 }
 
@@ -501,6 +526,7 @@ void App::apply_input() {
 void App::publish() {
     apply_input();
     link_.write_tracking(rig_.tracking());
+    link_.write_room(room_);
     dirty_ = true;
 }
 
@@ -714,11 +740,13 @@ const char* session_state_name(int state) { return state_name(state); }
 
 // ---- headless ------------------------------------------------------------------------------------
 
-// THE SCRIPTED MOVE, once the application is drawing: the head turned 30 degrees to the left, and the
-// right hand's trigger and A held. The test client looks for exactly these.
+// THE SCRIPTED MOVE, once the application is drawing: the head turned 30 degrees to the left, the right
+// hand's trigger and A held, and the ArUco marker taken out of the room. The test client looks for exactly
+// these.
 int App::headless(const std::string& dir) {
     if (!link_.attached()) { std::println(stderr, "openxr-sim: headless needs --headset"); return 2; }
     link_.write_tracking(rig_.tracking());
+    link_.write_room(room_);
     bool scripted = false, focused = false;
     for (;;) {
         const int r = link_.wait(100);
@@ -730,6 +758,13 @@ int App::headless(const std::string& dir) {
             rig_.turn(-(30.0 * 3.14159265358979 / 180) / 0.005, 0);
             mouse_held_[1] = kTrigger | kPrimary;
             apply_input();
+            for (uint32_t i = 0; i < room_.count; i++)
+                if (room_.marker[i].kind == OXS_MARKER_ARUCO) {
+                    std::copy(room_.marker + i + 1, room_.marker + room_.count, room_.marker + i);
+                    room_.count--;
+                    break;
+                }
+            link_.write_room(room_);
             link_.write_tracking(rig_.tracking());
             scripted = true;
         }

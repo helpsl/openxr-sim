@@ -55,6 +55,7 @@ public:
     // What the application is doing (the runtime's seqlock); false while it is mid-write.
     bool status(oxs_shm_status& out) const;
     void write_tracking(const oxs_tracking&);
+    void write_room(const oxs_room&);
 
 private:
     void compose_eye(const oxs_shm_slot& s, uint32_t slot, uint32_t e, const oxs_shm_eye& eye, int max_w, int max_h,

@@ -44,6 +44,30 @@ struct oxs_tracking {
     struct oxs_hand hand[2];     // 0 left, 1 right
 };
 
+// SPATIAL MARKERS (DESIGN.md, "Spatial entities"): printed codes in the room, which the simulator owns and the
+// runtime reports through XR_EXT_spatial_marker_tracking when the headset can see them (oxs_marker_seen,
+// common/xrmath.h). A marker's pose is its centre, +X to the right of the printed face, +Y to its top, +Z
+// out of the face -- the extension's own convention.
+enum oxs_marker_kind { OXS_MARKER_QR = 1, OXS_MARKER_MICRO_QR, OXS_MARKER_ARUCO, OXS_MARKER_APRIL_TAG };
+#define OXS_MARKERS_MAX 16
+#define OXS_MARKER_TEXT 256   // a QR code's text, NUL included
+
+struct oxs_marker {
+    uint32_t serial;          // never reused: a marker removed and another added is a new entity
+    int32_t kind;             // enum oxs_marker_kind
+    int32_t dict;             // ArUco, AprilTag: the dictionary, by XrSpatialMarkerArucoDictEXT's or
+                              // XrSpatialMarkerAprilTagDictEXT's numbers; else 0
+    uint32_t id;              // ArUco, AprilTag: the code's number in its dictionary; else 0
+    struct oxs_pose pose;     // in STAGE
+    float size;               // the side of the printed square, metres
+    char text[OXS_MARKER_TEXT];   // QR, Micro QR: what it encodes
+};
+
+struct oxs_room {
+    uint32_t count;
+    struct oxs_marker marker[OXS_MARKERS_MAX];
+};
+
 // What the application drew for one eye: the rectangle of the image it named, in its own byte order.
 struct oxs_eye {
     const uint8_t *pixels;
@@ -118,6 +142,8 @@ struct oxs_device {
     bool (*track)(struct oxs_tracking *out);
     bool (*present)(const struct oxs_frame *frame);
     void (*status)(const struct oxs_status *status);
+    // The markers in the room now; false once the headset has gone.
+    bool (*room)(struct oxs_room *out);
 };
 
 extern const struct oxs_device oxs_device_null;

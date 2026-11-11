@@ -1,7 +1,7 @@
 # openxr-sim: an OpenXR runtime whose headset is a window on the desktop. README.md says what it is,
 # docs/DESIGN.md how it works.
 cmake_minimum_required(VERSION 3.21)
-project(openxr-sim VERSION 0.8.3 LANGUAGES C CXX)
+project(openxr-sim VERSION 0.9.0 LANGUAGES C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 23)
@@ -49,7 +49,7 @@ if(NOT OPENXR_SIM_VULKAN_INCLUDE AND DEFINED ENV{VULKAN_SDK})
 endif()
 
 # ---- the runtime -------------------------------------------------------------------------------------
-set(OXS_RUNTIME_SOURCES runtime/runtime.c runtime/session.c runtime/hand.c runtime/swapchain.c runtime/swapchain_vk.c
+set(OXS_RUNTIME_SOURCES runtime/runtime.c runtime/session.c runtime/hand.c runtime/spatial.c runtime/swapchain.c runtime/swapchain_vk.c
     runtime/swapchain_gl.c runtime/input.c runtime/device_null.c runtime/device_sim.c)
 if(WIN32)
     list(APPEND OXS_RUNTIME_SOURCES runtime/plat_win32.c runtime/swapchain_d3d11.c runtime/swapchain_d3d12.c runtime/openxr_sim.def)

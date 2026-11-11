@@ -3,7 +3,8 @@
 //
 // WHAT THE RUNTIME'S FILES SHARE: the handle objects, the session, the logger. runtime.c is the
 // loader, the instance and the dispatch table; session.c the session's states, its frames and its
-// spaces; swapchain.c with swapchain_vk.c and swapchain_gl.c the images; input.c the actions. DESIGN.md
+// spaces; swapchain.c with swapchain_vk.c and swapchain_gl.c the images; input.c the actions; spatial.c the
+// spatial entities (markers, anchors) and their futures. DESIGN.md
 // says what the simulated headset is.
 #ifndef OPENXR_SIM_INTERNAL_H
 #define OPENXR_SIM_INTERNAL_H
@@ -71,6 +72,7 @@ XrTime now_ns(void);
 enum {
     MAGIC_INSTANCE = 0x4c584931, MAGIC_ACTION_SET, MAGIC_ACTION, MAGIC_MESSENGER,
     MAGIC_SESSION, MAGIC_SPACE, MAGIC_SWAPCHAIN, MAGIC_HAND_TRACKER,
+    MAGIC_FUTURE, MAGIC_SPATIAL_CONTEXT, MAGIC_SPATIAL_SNAPSHOT, MAGIC_SPATIAL_ENTITY,
 };
 
 struct object {
@@ -100,7 +102,8 @@ void destroy(struct object *gone);
 
 // Each file's functions for the dispatch table, ended by { NULL, NULL }.
 struct entry { const char *name; PFN_xrVoidFunction fn; };
-extern const struct entry session_functions[], swapchain_functions[], input_functions[], hand_functions[];
+extern const struct entry session_functions[], swapchain_functions[], input_functions[], hand_functions[],
+    future_functions[], spatial_functions[], anchor_functions[];
 #define ENTRY(n) { "xr" #n, (PFN_xrVoidFunction)oxs_##n },
 
 // ---- the instance --------------------------------------------------------------------------------
@@ -113,6 +116,9 @@ struct instance {
     bool cylinder, equirect2, color_scale_bias;
     bool hand_tracking;             // XR_EXT_hand_tracking enabled: its functions are there (hand.c)
     bool hand_interaction;          // XR_EXT_hand_interaction enabled: its profile and the pinch and poke poses (input.c)
+    bool future, spatial_entity;    // XR_EXT_future, XR_EXT_spatial_entity enabled: their functions (spatial.c)
+    bool marker_tracking;           // XR_EXT_spatial_marker_tracking enabled: its capabilities (spatial.c)
+    bool spatial_anchor;            // XR_EXT_spatial_anchor enabled: its capability and xrCreateSpatialAnchorEXT (spatial.c)
     bool asked_vulkan, asked_gl;    // the graphics requirements were asked, as OpenXR insists
     bool asked_d3d11, asked_d3d12;
 #ifdef _WIN32
@@ -131,6 +137,9 @@ struct instance {
 };
 
 void post_event(struct instance *in, const void *event, size_t size);
+// Takes back the queued events of `type` whose first member after `next` is `handle`: an event about a
+// handle that has been destroyed.
+void unpost_events(struct instance *in, XrStructureType type, uint64_t handle);
 
 // Each eye's recommended size (xrEnumerateViewConfigurationViews), and the size a frame of no projection
 // layer is composited at.
@@ -189,6 +198,8 @@ struct session {
     struct oxs_pose local_origin; // where LOCAL is, in STAGE: the head where the session began
     pthread_mutex_t track_lock;      // `tracking`: read from the render thread and the input thread alike
     struct oxs_tracking tracking; // the devices, as last read
+    struct oxs_room room;            // the room's markers, as last read (spatial.c); under track_lock
+    bool room_read;                  // false: none read yet, and the room is as it starts
     // Actions
     struct action_set **attached;
     size_t nattached;
@@ -329,5 +340,10 @@ bool input_pose(struct session *s, struct action *a, XrPath subaction, struct ox
 // same space as `grip` (hand.c): the pinch, between the index fingertip and the thumb's, and the poke, on
 // the surface of the index fingertip -- of the hand hand tracking draws, its index straight.
 void hand_pinch_poke(int hand, const struct oxs_pose *grip, struct oxs_pose *pinch, struct oxs_pose *poke);
+
+// ---- spatial entities ----------------------------------------------------------------------------
+
+// XR_EXT_spatial_entity's discovery recommendations for the session's contexts (spatial.c), at xrPollEvent.
+void spatial_poll(struct session *s);
 
 #endif

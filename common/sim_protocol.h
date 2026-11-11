@@ -14,6 +14,10 @@
 // TRACKING and STATUS go one way each, as seqlocks: the writer makes `seq` odd, writes, makes it even;
 // the reader copies and keeps the copy only if `seq` was even and unchanged across it.
 //
+// THE ROOM (DESIGN.md, "Spatial entities") goes the same way as tracking, from the simulator: the markers, as
+// a seqlock, invalid until the simulator has written them once -- until then the runtime has the room's
+// markers as they start (oxs_room_home).
+//
 // A COMPOSITED FRAME (any frame but one plain projection layer; DESIGN.md, "Composition layers") also
 // carries, in its slot, every layer for each eye -- resolved by the runtime, its pose in STAGE -- and each
 // layer's sub-image in the slot's ARENA, OXS_ARENA bytes after the two eyes. A sub-image wider or taller
@@ -31,7 +35,8 @@
 #include <string.h>
 
 #define OXS_SHM_MAGIC 0x584f534cu   // "LOSX": the value from before the split
-#define OXS_SHM_VERSION 3u   // 2: composition layers; 3: openxr-sim, the handles named on the command line on Windows
+#define OXS_SHM_VERSION 4u   // 2: composition layers; 3: openxr-sim, the handles named on the command line on Windows;
+                              // 4: the room's markers
 #define OXS_EYE_MAX 2048u           // an eye wider or taller than this is cut to it
 #define OXS_ARENA (32u << 20)       // per slot: the layers' sub-images, after the eyes
 #define OXS_SLOTS 3u
@@ -79,6 +84,9 @@ struct oxs_shm {
     uint32_t tracking_seq;
     uint32_t tracking_valid;   // 0 until the simulator has written the poses once
     struct oxs_tracking tracking;
+    uint32_t room_seq;
+    uint32_t room_valid;       // 0 until the simulator has written the room once
+    struct oxs_room room;
 };
 
 #define OXS_SHM_HEADER 65536u   // the structure above fits in it (device_sim.c asserts it)

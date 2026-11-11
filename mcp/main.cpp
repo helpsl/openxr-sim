@@ -366,6 +366,30 @@ Result call(const std::string& name, const Json::Value& args) {
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         return relay(*id, "release " + hand + controls);
     }
+    if (name == "list_markers") return relay(*id, "markers");
+    if (name == "reset_markers") return relay(*id, "reset-markers");
+    if (name == "remove_marker") {
+        const Json::Value& s = args["serial"];
+        if (s.isString() && s.asString() == "all") return relay(*id, "remove-marker all");
+        if (!s.isIntegral()) return failed("`serial` is a marker's serial, from list_markers, or \"all\"");
+        return relay(*id, std::format("remove-marker {}", s.asInt64()));
+    }
+    if (name == "add_marker") {
+        const std::string kind = args.get("kind", "").asString();
+        const Json::Value& p = args["position"];
+        if (kind.empty() || kind.find_first_of(" \t\r\n") != std::string::npos) return failed("`kind` names the kind of marker");
+        if (!p.isArray() || p.size() != 3) return failed("`position` must be [x, y, z] in metres");
+        std::string code;
+        if (kind == "qr" || kind == "micro-qr") {
+            code = args.get("text", "").asString();
+            if (code.empty() || code.find_first_of("\r\n") != std::string::npos) return failed("a QR code needs `text`, on one line");
+        } else {
+            if (!args["id"].isIntegral()) return failed("an ArUco marker or AprilTag needs its `id` in its dictionary");
+            code = std::to_string(args["id"].asInt64());
+        }
+        return relay(*id, std::format("add-marker {} {} {} {} {} {} {} {}", kind, num(p[0]), num(p[1]), num(p[2]),
+                                      num(args.get("yaw", 0)), num(args.get("pitch", 0)), num(args.get("size", 0.15)), code));
+    }
     if (name == "screenshot") {
         const int max = std::clamp(args.get("max_size", 512).asInt(), 16, 2048);
         const auto v = ask(*id, std::format("shot {}", max), &error);
@@ -495,6 +519,36 @@ Json::Value tools() {
     }
     list.append(tool("reset", "Put the headset and hands back where an application first sees them: standing at the "
                               "origin, eyes 1.6 m up, facing -Z."));
+    list.append(tool("list_markers", "The printed markers in the simulated room -- QR codes, Micro QR codes, ArUco markers and "
+                                     "AprilTags -- with each one's serial, pose (STAGE metres; yaw and pitch the way its face "
+                                     "looks), size, code, and whether the headset sees it now. An application using "
+                                     "XR_EXT_spatial_marker_tracking finds those it sees."));
+    {
+        Json::Value p;
+        Json::Value kind = prop("string", "qr, micro-qr, aruco-4x4-50 .. aruco-7x7-1000 (side 4 to 7; 50, 100, 250 or 1000 "
+                                          "codes), or apriltag-16h5, apriltag-25h9, apriltag-36h10, apriltag-36h11.");
+        p["kind"] = kind;
+        Json::Value pos = prop("array", "[x, y, z] of its centre, metres, in STAGE.");
+        pos["items"]["type"] = "number";
+        p["position"] = pos;
+        p["yaw"] = prop("number", "Degrees the way its printed face looks: 0 faces +Z (back towards the start), 90 faces +X.");
+        p["pitch"] = prop("number", "Degrees its face tilts up: 90 lies face up, -90 on the ceiling.");
+        p["size"] = prop("number", "Its side in metres (default 0.15). The headset reads one up to 20 sides away.");
+        p["text"] = prop("string", "A QR or Micro QR code's text.");
+        p["id"] = prop("integer", "An ArUco marker's or AprilTag's number in its dictionary.");
+        list.append(tool("add_marker", "Put up a printed marker in the room. It is seen while it is within the headset's "
+                                       "90-degree view, faces it, and is near enough.", p, { "kind", "position" }));
+    }
+    {
+        Json::Value p;
+        p["serial"] = prop("integer", "The marker's serial, from list_markers; or the string \"all\".");
+        p["serial"]["type"] = Json::Value(Json::arrayValue);
+        p["serial"]["type"].append("integer");
+        p["serial"]["type"].append("string");
+        list.append(tool("remove_marker", "Take a marker out of the room: an application tracking it sees it stop.", p, { "serial" }));
+    }
+    list.append(tool("reset_markers", "The room's markers as they start: a QR code ahead, a Micro QR code beside it, an ArUco "
+                                      "marker on a table and an AprilTag on the wall to the left."));
     return list;
 }
 

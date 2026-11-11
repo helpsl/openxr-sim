@@ -533,3 +533,28 @@ Left eye, Right eye, Both eyes, and V steps through them (`App::shown_`, sim/app
   red eye alone, green alone, both side by side -- and 0 layout faults in each; `left.ppm`/`right.ppm` and
   the summary unchanged.
 
+
+## Spatial entities: markers and anchors (0.9.0, 2026-11-11)
+
+The owner: "Can we add support for spatial marker tracking XR_EXT_spatial_entity", then "also
+XR_EXT_SPATIAL_ANCHOR_EXTENSION_NAME XR_EXT_SPATIAL_MARKER_TRACKING_EXTENSION_NAME
+XR_EXT_FUTURE_EXTENSION_NAME". All four, from the 1.1.49 headers on (DESIGN.md, "Spatial entities").
+
+* **A test that raced the simulator, seen only under Wine.** The `spatial` run's second look at the markers
+  first waited for the head turn and 20 frames more, then checked that a discovery had been recommended
+  since the first. Under Wine it failed one time in three: the recommendation is posted when the
+  application calls `xrPollEvent` (`spatial_poll`), and the client polls events at the top of its frame but
+  sees the turn later in the same frame, in `xrLocateViews` -- so the event for the AprilTag the turn brings
+  into view comes at the *next* frame's poll, and with Wine's slower frames the 20 were sometimes used up
+  first, or the turn arrived between the poll and the views. Nothing was wrong in the runtime. The client
+  now looks again once the recommendation has been polled (or after 360 frames, five seconds, when it is
+  overdue and fails), and the session is not ended before that second look; 3 runs in 3 pass under Wine
+  since, and every Linux run.
+* **The scripted move takes away the ArUco marker**, not the Micro QR code, which now sits 80 cm right of
+  the QR code so the turn leaves it out of view: one run checks a marker PAUSED (its data left alone) and
+  another STOPPED.
+
+Verified (2026-11-11): `tests/sim-test.sh`, all eight runs, the new `spatial` one with the anchors made in
+STAGE and in a space turned 90 degrees and moved from it; the Windows build's `--spatial` under Wine, 3 in
+3. The Windows CI job runs it with D3D11 as well. Our own client against our own reading of the
+specification: no CTS.

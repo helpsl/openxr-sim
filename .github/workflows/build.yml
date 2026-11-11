@@ -159,6 +159,8 @@ jobs:
           for api in ("d3d11", "d3d12"):
               run(api, [f"--{api}"])
               run(f"{api}-layers", [f"--{api}", "--layers"])
+          # The spatial entities (sim_client.c, --spatial), which are the same whatever the graphics.
+          run("d3d11-spatial", ["--d3d11", "--spatial"])
           print(f"{failures} failed")
           sys.exit(1 if failures else 0)
 

@@ -9,6 +9,7 @@
 #include "device.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 static inline struct oxs_pose oxs_pose_identity(void)
@@ -121,6 +122,69 @@ static inline void oxs_tracking_home(struct oxs_tracking *t)
         pointing.p[2] = -0.35f;
         oxs_hand_poses(&pointing, hand);
     }
+}
+
+// THE ROOM'S MARKERS AT THE START (DESIGN.md, "Spatial entities"): one of each kind the runtime tracks, so an
+// application sees markers without anything being set up. A QR code on the wall ahead, an ArUco marker
+// (4x4_50, number 7) lying on a table below it, a Micro QR code to the right of the QR code -- out of view
+// once the head turns 30 degrees to the left -- and an AprilTag (36h11, number 3) on the wall to the left,
+// out of view until the head turns towards it. The simulator's
+// first serial after these is OXS_ROOM_HOME_SERIALS + 1.
+#define OXS_ROOM_HOME_SERIALS 4u
+
+// HOW MANY CODES A DICTIONARY HOLDS, by XrSpatialMarkerArucoDictEXT's numbers (1..16: 4x4 to 7x7, each of
+// 50, 100, 250 and 1000) or XrSpatialMarkerAprilTagDictEXT's (1..4: 16h5, 25h9, 36h10, 36h11); 0 for a
+// dictionary that is neither, or a kind without one.
+static inline uint32_t oxs_marker_dict_size(int kind, int dict)
+{
+    static const uint32_t aruco[4] = { 50, 100, 250, 1000 }, april[4] = { 30, 35, 2320, 587 };
+    if (kind == OXS_MARKER_ARUCO && dict >= 1 && dict <= 16) return aruco[(dict - 1) % 4];
+    if (kind == OXS_MARKER_APRIL_TAG && dict >= 1 && dict <= 4) return april[dict - 1];
+    return 0;
+}
+
+// A marker's orientation from where its printed face looks: `yaw` turns it about +Y (0 faces +Z, back
+// towards the start; 90 degrees faces +X), `pitch` tilts the face up (90 degrees: lying face up).
+static inline void oxs_marker_facing(float yaw, float pitch, float q[4]) { oxs_quat_from_euler(yaw, -pitch, 0, q); }
+
+static inline void oxs_room_home(struct oxs_room *room)
+{
+    memset(room, 0, sizeof *room);
+    static const struct { int kind, dict; uint32_t id; float p[3], yaw, pitch, size; const char *text; } home[] = {
+        { OXS_MARKER_QR, 0, 0, { 0, 1.5f, -2 }, 0, 0, 0.2f, "openxr-sim" },
+        { OXS_MARKER_ARUCO, 1, 7, { 0, 0.8f, -1.2f }, 0, 1.5707963f, 0.1f, "" },
+        { OXS_MARKER_MICRO_QR, 0, 0, { 0.8f, 1.5f, -2 }, 0, 0, 0.15f, "OXS" },
+        { OXS_MARKER_APRIL_TAG, 4, 3, { -2, 1.5f, -1.2f }, 1.5707963f, 0, 0.2f, "" },
+    };
+    for (uint32_t i = 0; i < sizeof home / sizeof home[0]; i++) {
+        struct oxs_marker *m = &room->marker[i];
+        m->serial = i + 1;
+        m->kind = home[i].kind;
+        m->dict = home[i].dict;
+        m->id = home[i].id;
+        oxs_marker_facing(home[i].yaw, home[i].pitch, m->pose.q);
+        memcpy(m->pose.p, home[i].p, sizeof m->pose.p);
+        m->size = home[i].size;
+        snprintf(m->text, sizeof m->text, "%s", home[i].text);
+    }
+    room->count = sizeof home / sizeof home[0];
+}
+
+// WHETHER THE HEADSET SEES A MARKER: its centre inside the 90-degree field both eyes share (tangents of 1
+// each way, from the head), its printed face turned towards the head by less than 70 degrees, and near
+// enough to read -- the square at least a twentieth of its distance across (a 20 cm code to 4 m).
+static inline bool oxs_marker_seen(const struct oxs_pose *head, const struct oxs_marker *m)
+{
+    const struct oxs_pose in_head = oxs_pose_relative(head, &m->pose);
+    const float *c = in_head.p;
+    const float dist = sqrtf(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+    if (c[2] >= -0.05f || fabsf(c[0]) > -c[2] || fabsf(c[1]) > -c[2]) return false;
+    if (m->size <= 0 || m->size < dist / 20) return false;
+    const float z[3] = { 0, 0, 1 };
+    float face[3];
+    oxs_quat_rotate(in_head.q, z, face);
+    // From the marker towards the head (the head's origin) is -c.
+    return -(face[0] * c[0] + face[1] * c[1] + face[2] * c[2]) > cosf(1.2217305f) * dist;
 }
 
 #endif

@@ -303,4 +303,10 @@ void Link::write_tracking(const oxs_tracking& t) {
     oxs_store(&shm_->tracking_valid, 1);
 }
 
+void Link::write_room(const oxs_room& r) {
+    if (shm_ == nullptr) return;
+    oxs_seq_write(&shm_->room_seq, &shm_->room, &r, sizeof r);
+    oxs_store(&shm_->room_valid, 1);
+}
+
 }  // namespace oxs

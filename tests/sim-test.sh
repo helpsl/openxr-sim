@@ -21,7 +21,10 @@
 # OUT_DIR/hands): both hands' joints against the grips, the scripted trigger and A in the right hand's.
 # And with XR_EXT_hand_interaction (sim_client --hand-interaction; OUT_DIR/hand-interaction, with hand
 # tracking as well): only the hands' profile suggested, the trigger as the pinch, the pinch and poke poses
-# against the grips and the open hand's joints.
+# against the grips and the open hand's joints. And with XR_EXT_spatial_entity, XR_EXT_spatial_marker_tracking
+# and XR_EXT_spatial_anchor (sim_client --spatial; OUT_DIR/spatial): the room's markers discovered before and
+# after the head turn, in STAGE and in a space turned and moved from it; anchors made and found; a marker the
+# turn leaves out of view PAUSED, one the simulator takes away STOPPED.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 build="${1:-$here/../build}"
@@ -138,6 +141,7 @@ if [ -z "$wine" ]; then
 fi
 run hands --hands
 run hand-interaction "--hand-interaction --hands"
+run spatial --spatial
 if [ -n "$wine" ]; then
     run d3d12 --d3d12
     if [ -f "$dxvk/d3d11.dll" ] && [ -f "$vkd3d_proton/d3d12.dll" ]; then

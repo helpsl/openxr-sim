@@ -166,6 +166,12 @@ static const struct { const char *name; uint32_t version; } EXTENSIONS[] = {
     // Joints made from the controllers (hand.c).
     { XR_EXT_HAND_TRACKING_EXTENSION_NAME, XR_EXT_hand_tracking_SPEC_VERSION },
     { XR_EXT_HAND_INTERACTION_EXTENSION_NAME, XR_EXT_hand_interaction_SPEC_VERSION },
+    // Spatial entities (spatial.c): the room's markers, found by the headset, and the application's anchors;
+    // and the futures they are found through.
+    { XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_future_SPEC_VERSION },
+    { XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, XR_EXT_spatial_entity_SPEC_VERSION },
+    { XR_EXT_SPATIAL_MARKER_TRACKING_EXTENSION_NAME, XR_EXT_spatial_marker_tracking_SPEC_VERSION },
+    { XR_EXT_SPATIAL_ANCHOR_EXTENSION_NAME, XR_EXT_spatial_anchor_SPEC_VERSION },
 #ifdef _WIN32
     { XR_KHR_D3D11_ENABLE_EXTENSION_NAME, XR_KHR_D3D11_enable_SPEC_VERSION },
     { XR_KHR_D3D12_ENABLE_EXTENSION_NAME, XR_KHR_D3D12_enable_SPEC_VERSION },
@@ -218,7 +224,8 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_CreateInstance(const XrInstanceCreateI
     // 1.0 and 1.1 applications alike; a 2.x application is told this runtime is too old.
     if (XR_VERSION_MAJOR(info->applicationInfo.apiVersion) != 1) return XR_ERROR_API_VERSION_UNSUPPORTED;
     bool headless = false, cylinder = false, equirect2 = false, color_scale_bias = false, hand_tracking = false,
-         hand_interaction = false;
+         hand_interaction = false, future = false, spatial_entity = false, marker_tracking = false,
+         spatial_anchor = false;
     for (uint32_t i = 0; i < info->enabledExtensionCount; i++) {
         if (!offered(info->enabledExtensionNames[i])) {
             say("%s asked for %s, which is not offered", info->applicationInfo.applicationName,
@@ -232,6 +239,17 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_CreateInstance(const XrInstanceCreateI
         if (strcmp(e, XR_KHR_COMPOSITION_LAYER_COLOR_SCALE_BIAS_EXTENSION_NAME) == 0) color_scale_bias = true;
         if (strcmp(e, XR_EXT_HAND_TRACKING_EXTENSION_NAME) == 0) hand_tracking = true;
         if (strcmp(e, XR_EXT_HAND_INTERACTION_EXTENSION_NAME) == 0) hand_interaction = true;
+        if (strcmp(e, XR_EXT_FUTURE_EXTENSION_NAME) == 0) future = true;
+        if (strcmp(e, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME) == 0) spatial_entity = true;
+        if (strcmp(e, XR_EXT_SPATIAL_MARKER_TRACKING_EXTENSION_NAME) == 0) marker_tracking = true;
+        if (strcmp(e, XR_EXT_SPATIAL_ANCHOR_EXTENSION_NAME) == 0) spatial_anchor = true;
+    }
+    // Each builds on another: marker tracking and anchors on spatial entities, spatial entities on futures.
+    const char *without = spatial_entity && !future ? XR_EXT_FUTURE_EXTENSION_NAME
+                        : (marker_tracking || spatial_anchor) && !spatial_entity ? XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME : NULL;
+    if (without != NULL) {
+        say("%s enabled an extension that needs %s, without it", info->applicationInfo.applicationName, without);
+        return XR_ERROR_EXTENSION_DEPENDENCY_NOT_ENABLED;
     }
     if (info->enabledApiLayerCount > 0) return XR_ERROR_API_LAYER_NOT_PRESENT;   // the loader's job
     struct instance *in = make(sizeof *in, MAGIC_INSTANCE, NULL, NULL);
@@ -243,6 +261,10 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_CreateInstance(const XrInstanceCreateI
     in->color_scale_bias = color_scale_bias;
     in->hand_tracking = hand_tracking;
     in->hand_interaction = hand_interaction;
+    in->future = future;
+    in->spatial_entity = spatial_entity;
+    in->marker_tracking = marker_tracking;
+    in->spatial_anchor = spatial_anchor;
     snprintf(in->app_name, sizeof in->app_name, "%s", info->applicationInfo.applicationName);
     *out = (XrInstance)(uintptr_t)in;
     say("instance for %s (device \"%s\")", in->app_name, device()->name);
@@ -283,12 +305,30 @@ void post_event(struct instance *in, const void *event, size_t size)
     pthread_mutex_unlock(&lock);
 }
 
+void unpost_events(struct instance *in, XrStructureType type, uint64_t handle)
+{
+    pthread_mutex_lock(&lock);
+    const unsigned cap = sizeof in->events / sizeof in->events[0];
+    unsigned kept = 0;
+    for (unsigned i = 0; i < in->event_count; i++) {
+        const XrEventDataBuffer e = in->events[(in->event_head + i) % cap];
+        const XrEventDataBaseHeader *h = (const XrEventDataBaseHeader *)&e;
+        uint64_t about;
+        memcpy(&about, (const char *)&e + sizeof *h, sizeof about);   // the member after type and next
+        if (h->type == type && about == handle) continue;
+        in->events[(in->event_head + kept++) % cap] = e;
+    }
+    in->event_count = kept;
+    pthread_mutex_unlock(&lock);
+}
+
 static XRAPI_ATTR XrResult XRAPI_CALL oxs_PollEvent(XrInstance instance, XrEventDataBuffer *event)
 {
     struct instance *in = (struct instance *)find(H(instance), MAGIC_INSTANCE);
     if (in == NULL) return XR_ERROR_HANDLE_INVALID;
     if (event == NULL) return XR_ERROR_VALIDATION_FAILURE;
     if (in->session != NULL) session_poll(in->session);
+    if (in->session != NULL && in->spatial_entity) spatial_poll(in->session);
     pthread_mutex_lock(&lock);
     if (in->event_count == 0) { pthread_mutex_unlock(&lock); return XR_EVENT_UNAVAILABLE; }
     *event = in->events[in->event_head];
@@ -850,6 +890,9 @@ static const char *const ALL_FUNCTIONS[] = {
 #endif
     XR_LIST_FUNCTIONS_XR_EXT_debug_utils(NAME)
     XR_LIST_FUNCTIONS_XR_EXT_hand_tracking(NAME)
+    XR_LIST_FUNCTIONS_XR_EXT_future(NAME)
+    XR_LIST_FUNCTIONS_XR_EXT_spatial_entity(NAME)
+    XR_LIST_FUNCTIONS_XR_EXT_spatial_anchor(NAME)
 };
 #undef NAME
 
@@ -866,7 +909,7 @@ static bool takes_system(const char *fn)
 static PFN_xrVoidFunction lookup(const char *name)
 {
     const struct entry *tables[] = { INSTANCE_FUNCTIONS, ALIASES, session_functions, swapchain_functions, input_functions,
-                                     hand_functions };
+                                     hand_functions, future_functions, spatial_functions, anchor_functions };
     for (size_t t = 0; t < sizeof tables / sizeof tables[0]; t++)
         for (const struct entry *e = tables[t]; e->name != NULL; e++)
             if (strcmp(name, e->name) == 0) return e->fn;
@@ -888,9 +931,14 @@ static XRAPI_ATTR XrResult XRAPI_CALL oxs_GetInstanceProcAddr(XrInstance instanc
     struct instance *in = (struct instance *)find(H(instance), MAGIC_INSTANCE);
     if (in == NULL) return XR_ERROR_HANDLE_INVALID;
     // An extension's functions are there only when it is enabled.
-    if (!in->hand_tracking)
-        for (const struct entry *e = hand_functions; e->name != NULL; e++)
-            if (strcmp(name, e->name) == 0) return XR_ERROR_FUNCTION_UNSUPPORTED;
+    const struct { bool enabled; const struct entry *functions; } gated[] = {
+        { in->hand_tracking, hand_functions }, { in->future, future_functions }, { in->spatial_entity, spatial_functions },
+        { in->spatial_anchor, anchor_functions },
+    };
+    for (size_t g = 0; g < sizeof gated / sizeof gated[0]; g++)
+        if (!gated[g].enabled)
+            for (const struct entry *e = gated[g].functions; e->name != NULL; e++)
+                if (strcmp(name, e->name) == 0) return XR_ERROR_FUNCTION_UNSUPPORTED;
     if ((*fn = lookup(name)) != NULL) return XR_SUCCESS;
     for (size_t i = 0; i < sizeof ALL_FUNCTIONS / sizeof ALL_FUNCTIONS[0]; i++)
         if (strcmp(name, ALL_FUNCTIONS[i]) == 0) {

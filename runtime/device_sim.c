@@ -88,6 +88,20 @@ static bool sim_track(struct oxs_tracking *out)
     return true;
 }
 
+static bool sim_room(struct oxs_room *out)
+{
+    if (!alive()) return false;
+    struct oxs_room r;
+    if (oxs_load(&sim.shm->room_valid) && oxs_seq_read(&sim.shm->room_seq, &r, &sim.shm->room, sizeof r) &&
+        r.count <= OXS_MARKERS_MAX) {
+        // The text is another process's: ended here whatever it wrote, so nothing reads past it.
+        for (uint32_t i = 0; i < OXS_MARKERS_MAX; i++) r.marker[i].text[OXS_MARKER_TEXT - 1] = '\0';
+        *out = r;
+    } else
+        oxs_room_home(out);
+    return true;
+}
+
 // A sub-image into the arena, packed, every `step`th pixel each way so that neither side is over
 // OXS_EYE_MAX; false when it does not fit what is left.
 static bool put_image(const struct oxs_eye *im, uint8_t *arena, uint64_t *used, uint64_t *offset, struct oxs_eye *out)
@@ -204,4 +218,5 @@ const struct oxs_device oxs_device_sim = {
     .track = sim_track,
     .present = sim_present,
     .status = sim_status,
+    .room = sim_room,
 };

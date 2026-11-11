@@ -19,6 +19,7 @@
 #include "rig.hpp"
 #include "ui.hpp"
 #include "window.hpp"
+#include "xrmath.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -28,6 +29,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace oxs {
 
@@ -56,6 +58,7 @@ private:
     void build_view(float w, float h);
     void build_panel(float w, float h);
     void build_hand(int hand);
+    void build_markers(float inner);
     void build_idle(float w);
 
     void on_key(int key, bool down, bool repeat, const Mods& mods);
@@ -73,10 +76,15 @@ private:
     std::string command(const std::string& line);
     std::string status_json() const;
     std::string poses_json() const;
+    std::string markers_json() const;
+    std::string marker_command(const std::vector<std::string>& w);
 
     std::string app_name_;
     Link link_;
     Rig rig_;
+    // THE ROOM'S MARKERS (DESIGN.md, "Spatial entities"): what the runtime reports when the headset sees them.
+    oxs_room room_{};
+    uint32_t next_serial_ = OXS_ROOM_HOME_SERIALS + 1;
     EyePixels eyes_[2];
     ImageView eye_view_[2];
     oxs_shm_status status_{};
@@ -124,6 +132,9 @@ private:
     bool closing_ = false;
     ControlSocket control_;
 };
+
+// A marker as a person reads it: "QR code \"openxr-sim\"", "ArUco 4x4_50 #7".
+std::string marker_name(const oxs_marker& m);
 
 // XrSessionState as a person reads it: "Focused".
 const char* session_state_name(int state);

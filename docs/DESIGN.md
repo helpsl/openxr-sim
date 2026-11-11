@@ -140,6 +140,49 @@ the same simulated controller (`runtime/input.c`), with no change to the simulat
   `/input/pinch_ext/`, `/input/poke_ext/`, `/input/aim_activate_ext/` or `/input/grasp_ext/`, is
   `XR_ERROR_PATH_UNSUPPORTED`. `palm_ext/pose` is not offered: it needs `XR_EXT_palm_pose`, which is not.
 
+## Spatial entities
+
+Since 0.9.0, `XR_EXT_spatial_entity` with `XR_EXT_spatial_marker_tracking` and `XR_EXT_spatial_anchor`,
+and the `XR_EXT_future` they are asynchronous through (`runtime/spatial.c`). The headset has no cameras, so
+the room is the simulator's: a list of printed markers, each a pose in STAGE, a size and a code
+(`struct oxs_room`, common/device.h), handed to the runtime through the shared memory as the poses are
+(`sim_protocol.h`, version 4).
+
+* **The room as it starts** (`oxs_room_home`, common/xrmath.h), one of each kind, so an application finds
+  markers with nothing set up: a QR code saying `openxr-sim` on the wall 2 m ahead at 1.5 m, 20 cm square;
+  a Micro QR code (`OXS`) 80 cm to its right, out of view once the head turns 30 degrees left; an ArUco marker (4x4_50, number 7) lying face up on a table 1.2 m ahead;
+  an AprilTag (36h11, number 3) on the wall to the left, out of view until the head turns towards it.
+  The control socket and the MCP server add, remove and reset them; the panel lists them, and which are in view.
+* **Seen** (`oxs_marker_seen`): the marker's centre within the 90-degree field both eyes share, its printed
+  face turned less than 70 degrees from the head, and its side at least a twentieth of its distance -- a 20 cm
+  code is read to 4 m. One rule, shared by the runtime and the panel, so what the panel says is in view is
+  what an application discovers.
+* **Pose**: the marker's centre, +X to the right of its printed face, +Y to its top, +Z out of it -- the
+  extension's own convention; `XrSpatialBounded2DDataEXT` is that pose and the side, square.
+* **Codes**: a QR or Micro QR code's text is a STRING buffer, its `markerId` 0; an ArUco marker or AprilTag
+  has its number and no buffer. A context sees only the dictionary it was configured with.
+* **Futures are ready at once**: there is nothing to wait for. A discovery snapshot is taken when it is
+  completed, in the base space and at the time completion names; an update snapshot when it is made. Both
+  are copies, so their data never changes.
+* **Tracking states**: a discovery finds what is in view now, TRACKING. A marker once discovered is PAUSED
+  out of view and STOPPED, for good, once it has left the room -- so a serial is never reused: a marker taken
+  away and put back is a new one (`reset-markers` gives the home markers new serials when they were gone).
+* **Discovery is recommended** (`XrEventDataSpatialDiscoveryRecommendedEXT`) when a marker a context
+  tracks comes into view that it has not discovered -- once for each marker, so a discovery that leaves it
+  out (a filter) is not followed by the event at every poll; never before the context is completed, and none
+  is left queued once it is destroyed.
+* **The room once the simulator has gone** is as it was last read: a closed window takes no marker away.
+* **Anchors** are a pose in STAGE, which nothing simulated moves: TRACKING wherever the base space can be
+  located, found by discovery as well as by update. An anchor lasts as long as the handle
+  `xrCreateSpatialAnchorEXT` made it with (or its context): destroyed, the anchor is STOPPED for any other
+  handle to it. A base space that cannot be located has nowhere to put one: `XR_ERROR_RUNTIME_FAILURE`.
+* **Features**: marker tracking's both -- `XrSpatialMarkerSizeEXT` makes every marker's bounds the size the
+  application says; `XrSpatialMarkerStaticOptimizationEXT` changes nothing, every simulated marker being
+  still.
+* **Only while enabled**: each extension's functions and capabilities are there only with it enabled, and
+  each needs what it builds on (`XR_ERROR_EXTENSION_DEPENDENCY_NOT_ENABLED`): marker tracking and anchors on
+  spatial entities, spatial entities on futures. Not offered: plane tracking, persistence.
+
 ## The simulator window
 
 The left eye, the right eye or both side by side (the panel's "The view shows"; V steps through them), and a
@@ -223,6 +266,10 @@ one, `\0openxr-sim/<uid>/<16 hex>`; on Windows a file, `%LOCALAPPDATA%\openxr-si
 | `hold HAND CONTROL...` / `release HAND [CONTROL...]` | trigger grip a b x y menu stick stick-up/down/left/right; held alongside the person's own |
 | `reset` | everything home, as R does |
 | `shot [MAX]` | both eyes side by side, each at most MAX pixels (default 512), as base64 PNG |
+| `markers` | the room's markers: serial, kind, position, the way the face looks (yaw, pitch), size, text or id, whether the headset sees it |
+| `add-marker KIND X Y Z YAW PITCH SIZE (ID \| TEXT...)` | KIND `qr`, `micro-qr`, `aruco-4x4-50` .. `aruco-7x7-1000`, `apriltag-16h5` .. `apriltag-36h11`; yaw 0 pitch 0 faces +Z, pitch 90 lies face up |
+| `remove-marker SERIAL` / `remove-marker all` | takes it away: an application tracking it sees it STOPPED |
+| `reset-markers` | the room as it starts |
 
 PART is `headset`, `left` or `right`. A connection from another user is closed unanswered.
 
@@ -233,7 +280,8 @@ it (`claude mcp add openxr-sim -- openxr-sim-mcp`) and gets the simulators as to
 `/proc/net/unix` and connects per call. (Linux only so far.) Tools: `list_simulators`, `launch` (an application started with
 `OPENXR_SIM_DEVICE=sim`, detached, its output in `~/.local/state/openxr-sim-mcp/`, waiting for its simulator
 to appear), `status`, `screenshot` (an image), `get_poses`, `set_pose`, `move`, `turn`, `press` (hold,
-150 ms, release), `hold`, `release`, `reset`. Each takes `simulator` (an id or its start) when more than one
+150 ms, release), `hold`, `release`, `reset`, `list_markers`, `add_marker`, `remove_marker`,
+`reset_markers`. Each takes `simulator` (an id or its start) when more than one
 is running.
 
 ## Testing it
@@ -250,7 +298,9 @@ with `--hands`, it locates both hands' joints and checks each bone along its joi
 grip with the back of the hand outwards, the open hand reaching ahead, and the right index curled by the
 trigger and its thumb down for A; with `--hand-interaction`, it suggests only the hands' profile and
 checks the trigger arriving as the pinch, the pinch and poke poses against the grips, and -- with
-`--hands` too -- against the open hand's joints);
+`--hands` too -- against the open hand's joints; with `--spatial`, it discovers the room's markers
+before and after the turn, in STAGE and in a space turned from it, makes anchors, and checks the Micro QR
+code the turn leaves PAUSED and the ArUco marker the script takes out of the room STOPPED);
 when the session ends it writes the last frame's eyes (`left.ppm`, `right.ppm`), the window it would have
 drawn (`window.png`, and its layout faults) and a `summary`. The script then checks the pixels -- the
 square's corner is what catches a picture flipped or eyes swapped.
