@@ -13,6 +13,7 @@
 
 #include <charconv>
 #include <cstdlib>
+#include <cstring>
 
 #include <algorithm>
 #include <cmath>
@@ -168,19 +169,30 @@ std::string marker_name(const oxs_marker& m) {
     }
 }
 
+std::array<double, 3> App::marker_angles(const oxs_marker& m) const {
+    if (const auto a = angles_.find(m.serial); a != angles_.end()) return a->second;
+    float y, p, r;
+    oxs_marker_angles(m.pose.q, &y, &p, &r);
+    const double deg = 180 / 3.14159265358979;
+    return { y * deg, p * deg, r * deg };
+}
+
+void App::place_marker(oxs_marker& m, const double p[3], const std::array<double, 3>& ypr) {
+    const double rad = 3.14159265358979 / 180;
+    oxs_marker_orient(static_cast<float>(ypr[0] * rad), static_cast<float>(ypr[1] * rad), static_cast<float>(ypr[2] * rad), m.pose.q);
+    for (int i = 0; i < 3; i++) m.pose.p[i] = static_cast<float>(p[i]);
+    angles_[m.serial] = ypr;
+}
+
 std::string App::markers_json() const {
     const oxs_pose head = rig_.tracking().head;
     std::string out = R"({"ok":true,"markers":[)";
     for (uint32_t i = 0; i < room_.count; i++) {
         const oxs_marker& m = room_.marker[i];
-        // Which way its printed face looks, as add-marker takes it.
-        const float z[3] = { 0, 0, 1 };
-        float face[3];
-        oxs_quat_rotate(m.pose.q, z, face);
-        const double deg = 180 / 3.14159265358979;
-        out += std::format(R"({}{{"serial":{},"kind":{},"position":[{:.4f},{:.4f},{:.4f}],"yaw":{:.2f},"pitch":{:.2f},"size":{:.4f})",
-                           i ? "," : "", m.serial, json_str(kind_name(m)), m.pose.p[0], m.pose.p[1], m.pose.p[2],
-                           std::atan2(face[0], face[2]) * deg, std::asin(std::clamp(face[1], -1.0f, 1.0f)) * deg, m.size);
+        // Which way it is turned, as add-marker and move-marker take it.
+        const auto a = marker_angles(m);
+        out += std::format(R"({}{{"serial":{},"kind":{},"position":[{:.4f},{:.4f},{:.4f}],"yaw":{:.2f},"pitch":{:.2f},"roll":{:.2f},"size":{:.4f})",
+                           i ? "," : "", m.serial, json_str(kind_name(m)), m.pose.p[0], m.pose.p[1], m.pose.p[2], a[0], a[1], a[2], m.size);
         if (m.kind == OXS_MARKER_QR || m.kind == OXS_MARKER_MICRO_QR) out += std::format(R"(,"text":{})", json_str(m.text));
         else out += std::format(R"(,"id":{})", m.id);
         out += std::format(R"(,"seen":{}}})", oxs_marker_seen(&head, &m) ? "true" : "false");
@@ -188,9 +200,72 @@ std::string App::markers_json() const {
     return out + "]}";
 }
 
-// add-marker KIND X Y Z YAW PITCH SIZE (ID | TEXT...), remove-marker SERIAL|all, reset-markers.
+// A marker's code from words w[from..]: a QR code's text (the words, a space between each), or an ArUco
+// marker's or AprilTag's number in its dictionary. Empty, or what is wrong.
+static std::string read_code(oxs_marker& m, const std::vector<std::string>& w, size_t from) {
+    std::fill(std::begin(m.text), std::end(m.text), '\0');
+    m.id = 0;
+    if (m.kind == OXS_MARKER_QR || m.kind == OXS_MARKER_MICRO_QR) {
+        std::string t = w[from];
+        for (size_t i = from + 1; i < w.size(); i++) t += " " + w[i];
+        if (t.empty()) return "a QR code's text is at least one character";
+        if (t.size() >= sizeof m.text) return std::format("a code's text is at most {} bytes", sizeof m.text - 1);
+        std::copy(t.begin(), t.end(), m.text);
+        return "";
+    }
+    const auto id = w.size() == from + 1 ? integer(w[from]) : std::nullopt;
+    const uint32_t n = oxs_marker_dict_size(m.kind, m.dict);
+    if (!id || *id < 0 || static_cast<uint32_t>(*id) >= n) return std::format("{} has codes 0 to {}", kind_name(m), n - 1);
+    m.id = static_cast<uint32_t>(*id);
+    return "";
+}
+
+// add-marker KIND X Y Z YAW PITCH SIZE (ID | TEXT...), move-marker SERIAL X Y Z YAW PITCH [ROLL [SIZE]],
+// set-marker-code SERIAL (ID | TEXT...), remove-marker SERIAL|all, reset-markers.
 std::string App::marker_command(const std::vector<std::string>& w) {
     const std::string& verb = w[0];
+    // The marker a serial names, or nullptr.
+    const auto find_marker = [&](const std::string& word) -> oxs_marker* {
+        const auto serial = integer(word);
+        for (uint32_t i = 0; serial && i < room_.count; i++)
+            if (room_.marker[i].serial == static_cast<uint32_t>(*serial)) return &room_.marker[i];
+        return nullptr;
+    };
+    if (verb == "move-marker") {
+        // The same marker somewhere else: an application tracking it sees it move, by the same id.
+        const char* usage = "move-marker SERIAL X Y Z YAW PITCH [ROLL [SIZE]]: STAGE metres; turned by YAW about +Y (0 faces +Z), "
+                            "then PITCH tilting its face up (90 lies face up), then ROLL about its face (anticlockwise), in "
+                            "degrees; SIZE its side in metres, or as it was";
+        if (w.size() < 7 || w.size() > 9) return fail(usage);
+        oxs_marker* m = find_marker(w[1]);
+        if (m == nullptr) return fail("no marker " + w[1] + " in the room");
+        bool ok = true;
+        double v[7] = { 0, 0, 0, 0, 0, 0, 0 };
+        for (size_t i = 0; i + 2 < w.size(); i++) v[i] = number(w[2 + i], &ok);
+        if (!ok) return fail(usage);
+        if (w.size() == 9 && !(v[6] > 0 && v[6] <= 10)) return fail("a marker's SIZE is its side, more than 0 and at most 10 metres");
+        place_marker(*m, v, { v[3], v[4], v[5] });
+        if (w.size() == 9) m->size = static_cast<float>(v[6]);
+        publish();
+        return markers_json();
+    }
+    if (verb == "set-marker-code") {
+        // A different code printed in its place: to an application, the marker that was there has gone (STOPPED)
+        // and a new one, with a serial of its own, is there to discover -- a marker's code is what it is.
+        if (w.size() < 3) return fail("set-marker-code SERIAL (ID | TEXT...): a QR code's text, or an ArUco marker's or AprilTag's number");
+        oxs_marker* m = find_marker(w[1]);
+        if (m == nullptr) return fail("no marker " + w[1] + " in the room");
+        oxs_marker changed = *m;
+        const std::string why = read_code(changed, w, 2);
+        if (!why.empty()) return fail(why);
+        if (changed.id != m->id || std::strcmp(changed.text, m->text) != 0) {
+            changed.serial = next_serial_++;
+            angles_[changed.serial] = marker_angles(*m);
+        }
+        *m = changed;
+        publish();
+        return markers_json();
+    }
     if (verb == "reset-markers") {
         // The markers as they start; one that was taken away comes back as a new marker, with a serial of its
         // own -- an entity once stopped stays stopped.
@@ -200,6 +275,7 @@ std::string App::marker_command(const std::vector<std::string>& w) {
             bool there = false;
             for (uint32_t k = 0; k < was.count; k++) there |= was.marker[k].serial == room_.marker[i].serial;
             if (!there) room_.marker[i].serial = next_serial_++;
+            angles_.erase(room_.marker[i].serial);   // turned as it starts
         }
         publish();
         return markers_json();
@@ -234,22 +310,10 @@ std::string App::marker_command(const std::vector<std::string>& w) {
     oxs_marker m{};
     m.kind = kind->kind;
     m.dict = kind->dict;
-    if (m.kind == OXS_MARKER_QR || m.kind == OXS_MARKER_MICRO_QR) {
-        std::string t = w[8];
-        for (size_t i = 9; i < w.size(); i++) t += " " + w[i];
-        if (t.size() >= sizeof m.text) return fail(std::format("a code's text is at most {} bytes", sizeof m.text - 1));
-        std::copy(t.begin(), t.end(), m.text);
-    } else {
-        const auto id = w.size() == 9 ? integer(w[8]) : std::nullopt;
-        const uint32_t n = oxs_marker_dict_size(m.kind, m.dict);
-        if (!id || *id < 0 || static_cast<uint32_t>(*id) >= n) return fail(std::format("{} has codes 0 to {}", kind->name, n - 1));
-        m.id = static_cast<uint32_t>(*id);
-    }
-    const double rad = 3.14159265358979 / 180;
-    oxs_marker_facing(static_cast<float>(v[3] * rad), static_cast<float>(v[4] * rad), m.pose.q);
-    for (int i = 0; i < 3; i++) m.pose.p[i] = static_cast<float>(v[i]);
-    m.size = static_cast<float>(v[5]);
+    if (const std::string why = read_code(m, w, 8); !why.empty()) return fail(why);
     m.serial = next_serial_++;
+    place_marker(m, v, { v[3], v[4], 0 });
+    m.size = static_cast<float>(v[5]);
     room_.marker[room_.count++] = m;
     publish();
     return markers_json();
@@ -327,7 +391,8 @@ std::string App::command(const std::string& line) {
         return poses_json();
     }
     if (verb == "markers") return markers_json();
-    if (verb == "add-marker" || verb == "remove-marker" || verb == "reset-markers") return marker_command(w);
+    if (verb == "add-marker" || verb == "move-marker" || verb == "set-marker-code" || verb == "remove-marker" || verb == "reset-markers")
+        return marker_command(w);
     if (verb == "shot") {
         int max = 512;
         if (w.size() > 1) {
@@ -342,7 +407,7 @@ std::string App::command(const std::string& line) {
         return std::format(R"({{"ok":true,"frame":{},"width":{},"height":{},"png":"{}"}})", link_.frames(), pw, ph, base64(png));
     }
     return fail("unknown command '" + verb + "': status poses set move turn hold release reset shot markers add-marker "
-                "remove-marker reset-markers");
+                "move-marker set-marker-code remove-marker reset-markers");
 }
 
 }  // namespace oxs

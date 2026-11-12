@@ -18,6 +18,7 @@
 #include <format>
 #include <fstream>
 #include <print>
+#include <sstream>
 #include <vector>
 
 namespace oxs {
@@ -390,26 +391,182 @@ void App::build_hand(int hand) {
     }
 }
 
-// THE ROOM'S MARKERS, and which of them the headset sees now -- what an application tracking them finds.
+// THE ROOM'S MARKERS, and which of them the headset sees now -- what an application tracking them finds;
+// under them the one chosen, to move, turn, resize or print a different code on.
 void App::build_markers(float inner) {
     const Theme& t = theme();
     Card card;
     caps("Markers in the room");
     if (room_.count == 0) text("None: the control socket's add-marker puts one up.", Role::Secondary, t.dim, { .wrap = true });
     const oxs_pose head = rig_.tracking().head;
+    const oxs_marker* const ch = chosen();
     for (uint32_t i = 0; i < room_.count; i++) {
         const oxs_marker& m = room_.marker[i];
+        const bool is_chosen = &m == ch;
         Style line;
+        line.tag = "marker";
+        line.index = i;
         line.w = Size::grow();
         line.row = true;
         line.gap = px(Space::S);
+        line.pad_x = px(Space::XS);
+        line.pad_y = 3;
+        line.radius = kRadiusSmall;
         line.align_y = CLAY_ALIGN_Y_CENTER;
+        if (is_chosen) line.background = t.control_hover;
+        else if (ui_->hovered("marker", i)) line.background = t.control;
         Box l(line);
-        text(marker_name(m), Role::Secondary, t.text, { .elide_at = inner - 96 });
+        text(marker_name(m), Role::Secondary, t.text, { .elide_at = inner - 110 });
         filler();
         const bool seen = oxs_marker_seen(&head, &m);
         badge(seen ? "In view" : "Out of view", seen ? Tone::Success : Tone::Neutral, seen);
     }
+    if (ch == nullptr) return;
+
+    // THE CHOSEN ONE'S VALUES, each typed into: a click opens it, Enter or Tab sets it, Escape leaves it.
+    const auto row_of = [&](const char* label, int first, int n) {
+        text(label, Role::Caption, t.dim);
+        Style r;
+        r.w = Size::grow();
+        r.row = true;
+        r.gap = px(Space::XS);
+        Box b(r);
+        for (int f = first; f < first + n; f++) {
+            const bool editing = edit_ == f;
+            field("mfield", static_cast<uint32_t>(f), "", editing ? edit_text_ : field_value(*ch, f), editing, editing && edit_bad_,
+                  Size::grow());
+        }
+    };
+    {
+        Style gap;
+        gap.h = Size::fixed(px(Space::XS));
+        Box g(gap);
+    }
+    text(std::format("{}  \xC2\xB7  serial {}", marker_name(*ch), ch->serial), Role::Body, t.text, { .elide_at = inner });
+    row_of("Position, metres in STAGE: x  y  z", 0, 3);
+    row_of("Turned, degrees, in this order: yaw  pitch  roll", 3, 3);
+    const bool qr = ch->kind == OXS_MARKER_QR || ch->kind == OXS_MARKER_MICRO_QR;
+    {
+        Style r;
+        r.w = Size::grow();
+        r.row = true;
+        r.gap = px(Space::XS);
+        Box b(r);
+        {
+            Style c;
+            c.w = Size::fixed(80);
+            c.gap = px(Space::XS);
+            Box cb(c);
+            text("Side, m", Role::Caption, t.dim);
+            field("mfield", 6, "", edit_ == 6 ? edit_text_ : field_value(*ch, 6), edit_ == 6, edit_ == 6 && edit_bad_, Size::grow());
+        }
+        {
+            Style c;
+            c.w = Size::grow();
+            c.gap = px(Space::XS);
+            Box cb(c);
+            text(qr ? "Text it encodes" : "Number in its dictionary", Role::Caption, t.dim);
+            field("mfield", 7, "", edit_ == 7 ? edit_text_ : field_value(*ch, 7), edit_ == 7, edit_ == 7 && edit_bad_, Size::grow());
+        }
+    }
+    if (!edit_error_.empty()) text(edit_error_, Role::Secondary, t.warning, { .wrap = true });
+    else text(edit_ >= 0 ? "Enter or Tab sets it; Escape leaves it as it was."
+                         : "Yaw turns it about +Y (0 faces +Z), pitch tilts its face up (90: face up), roll turns it about "
+                           "its face. A new code is a new marker to an application.",
+              Role::Secondary, t.dim, { .wrap = true });
+    {
+        Style r;
+        r.row = true;
+        r.gap = px(Space::XS);
+        Box b(r);
+        button("marker-here", 0, "Bring here", ButtonKind::Secondary);
+        button("marker-remove", 0, "Remove", ButtonKind::Secondary);
+    }
+}
+
+const oxs_marker* App::chosen() const {
+    for (uint32_t i = 0; i < room_.count; i++)
+        if (room_.marker[i].serial == chosen_marker_) return &room_.marker[i];
+    return room_.count > 0 ? &room_.marker[0] : nullptr;
+}
+
+std::string App::field_value(const oxs_marker& m, int f) const {
+    if (f < 3) return std::format("{:.3f}", m.pose.p[f]);
+    if (f < 6) {
+        const double a = marker_angles(m)[static_cast<size_t>(f - 3)];
+        return std::format("{:.1f}", std::abs(a) < 0.05 ? 0.0 : a);
+    }
+    if (f == 6) return std::format("{:.3f}", m.size);
+    return m.kind == OXS_MARKER_QR || m.kind == OXS_MARKER_MICRO_QR ? std::string(m.text) : std::to_string(m.id);
+}
+
+void App::begin_edit(int f) {
+    const oxs_marker* m = chosen();
+    if (m == nullptr) return;
+    chosen_marker_ = m->serial;
+    edit_ = f;
+    edit_text_ = field_value(*m, f);
+    edit_bad_ = false;
+    edit_error_.clear();
+    keys_.clear();   // the keys type now; nothing they held stays held
+    dirty_ = true;
+}
+
+// The field's text made the marker's, through the control socket's own commands -- the same checks, and a
+// new code the same new marker.
+bool App::commit_edit() {
+    const oxs_marker* m = chosen();
+    if (edit_ < 0 || m == nullptr) { edit_ = -1; return true; }
+    std::vector<std::string> w;
+    if (edit_ == 7) {
+        w = { "set-marker-code", std::to_string(m->serial) };
+        std::istringstream in(edit_text_);
+        for (std::string word; in >> word;) w.push_back(word);
+        if (w.size() == 2) w.push_back("");
+    } else {
+        std::array<std::string, 7> v;
+        for (int f = 0; f < 7; f++) v[static_cast<size_t>(f)] = f == edit_ ? edit_text_ : field_value(*m, f);
+        // The others as they are exactly, not as shown.
+        const auto a = marker_angles(*m);
+        for (int f = 0; f < 7; f++) {
+            if (f == edit_) continue;
+            v[static_cast<size_t>(f)] = f < 3 ? std::format("{}", m->pose.p[f]) : f < 6 ? std::format("{}", a[static_cast<size_t>(f - 3)])
+                                                                                  : std::format("{}", m->size);
+        }
+        w = { "move-marker", std::to_string(m->serial) };
+        for (const std::string& x : v) w.push_back(x);
+    }
+    const size_t at = static_cast<size_t>(m - room_.marker);
+    const std::string reply = marker_command(w);
+    if (reply.starts_with(R"({"ok":false)")) {
+        const size_t e = reply.find(R"("error":")");
+        edit_error_ = e == std::string::npos ? "not a value" : reply.substr(e + 9, reply.size() - e - 11);
+        edit_bad_ = true;
+        dirty_ = true;
+        return false;
+    }
+    if (at < room_.count) chosen_marker_ = room_.marker[at].serial;   // a new code: a new serial, the same place
+    edit_ = -1;
+    edit_bad_ = false;
+    edit_error_.clear();
+    dirty_ = true;
+    return true;
+}
+
+void App::on_char(unsigned c) {
+    if (edit_ < 0 || c < 32 || edit_text_.size() >= OXS_MARKER_TEXT - 5) return;
+    // UTF-8
+    if (c < 0x80) edit_text_ += static_cast<char>(c);
+    else if (c < 0x800) { edit_text_ += static_cast<char>(0xC0 | (c >> 6)); edit_text_ += static_cast<char>(0x80 | (c & 0x3F)); }
+    else if (c < 0x10000) {
+        edit_text_ += static_cast<char>(0xE0 | (c >> 12)); edit_text_ += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+        edit_text_ += static_cast<char>(0x80 | (c & 0x3F));
+    } else {
+        edit_text_ += static_cast<char>(0xF0 | (c >> 18)); edit_text_ += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+        edit_text_ += static_cast<char>(0x80 | ((c >> 6) & 0x3F)); edit_text_ += static_cast<char>(0x80 | (c & 0x3F));
+    }
+    edit_bad_ = false;
+    dirty_ = true;
 }
 
 // STARTED BY ITSELF: nothing to show but the choice, and what it means.
@@ -532,6 +689,22 @@ void App::publish() {
 
 void App::on_key(int key, bool down, bool repeat, const Mods& mods) {
     shift_ = mods.shift || ((key == GLFW_KEY_LEFT_SHIFT || key == GLFW_KEY_RIGHT_SHIFT) && down);
+    // A FIELD BEING TYPED INTO has the keys: text comes through on_char, and these.
+    if (edit_ >= 0 && down) {
+        if (key == GLFW_KEY_ESCAPE) { edit_ = -1; edit_bad_ = false; edit_error_.clear(); }
+        else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) commit_edit();
+        else if (key == GLFW_KEY_TAB) {
+            const int next = (edit_ + (mods.shift ? 7 : 1)) % 8;
+            if (commit_edit()) begin_edit(next);
+        } else if (key == GLFW_KEY_BACKSPACE && !edit_text_.empty()) {
+            do edit_text_.pop_back();   // a whole UTF-8 character
+            while (!edit_text_.empty() && (static_cast<unsigned char>(edit_text_.back()) & 0xC0) == 0x80);
+            edit_bad_ = false;
+        }
+        dirty_ = true;
+        return;
+    }
+    if (edit_ >= 0) return;
     if (down && (key == GLFW_KEY_ESCAPE || (mods.ctrl && (key == GLFW_KEY_W || key == GLFW_KEY_Q)))) { win_.quit(); return; }
     if (!link_.attached()) return;
     const int code = key_code(key);
@@ -559,9 +732,20 @@ void App::on_button(float x, float y, int button, bool pressed, int clicks) {
         return;
     }
     const auto h = ui_->hit(x, y);
+    // A click anywhere but the field being typed into sets it (or, when it is no value, leaves it as it was).
+    if (edit_ >= 0 && !(h && std::string_view(h->tag) == "mfield" && static_cast<int>(h->index) == edit_)) {
+        if (!commit_edit()) { edit_ = -1; edit_bad_ = false; edit_error_.clear(); }
+    }
     if (!h) return;
     const std::string_view tag = h->tag;
-    if (tag == "hold") {
+    if (tag == "mfield") {
+        if (static_cast<int>(h->index) != edit_) begin_edit(static_cast<int>(h->index));
+    } else if (tag == "marker") {
+        if (h->index < room_.count) { chosen_marker_ = room_.marker[h->index].serial; dirty_ = true; }
+    } else if (tag == "marker-remove") {
+        if (const oxs_marker* m = chosen()) marker_command({ "remove-marker", std::to_string(m->serial) });
+        dirty_ = true;
+    } else if (tag == "hold") {
         const uint32_t hand = h->index / 16, i = h->index % 16;
         if (hand < 2 && i < std::size(kPanelButtons)) { mouse_held_[hand] |= kPanelButtons[i].control; publish(); }
     } else if (tag == "part") {
@@ -571,6 +755,20 @@ void App::on_button(float x, float y, int button, bool pressed, int clicks) {
     } else if (tag == "reset") {
         rig_.reset();
         publish();
+    } else if (tag == "marker-here") {
+        // The same marker (its serial kept), a metre ahead of the headset with its face to it: the head's
+        // heading, and its pitch the other way -- a marker's +Z is back towards the eyes.
+        if (const oxs_marker* c = chosen()) {
+            oxs_marker& m = room_.marker[c - room_.marker];
+            const oxs_pose head = rig_.tracking().head;
+            const oxs_pose ahead = { { 0, 0, 0, 1 }, { 0, 0, -1 } };
+            const oxs_pose at = oxs_pose_compose(&head, &ahead);
+            double pos[3], yaw = 0, pitch = 0;
+            rig_.readout(Part::Headset, pos, yaw, pitch);
+            const double p[3] = { at.p[0], at.p[1], at.p[2] };
+            place_marker(m, p, { yaw, -pitch, 0 });
+            publish();
+        }
     } else if (tag == "runtime-on" || tag == "runtime-off") {
         change_runtime(tag == "runtime-on");
     } else if (tag == "use") {
@@ -597,7 +795,8 @@ void App::on_motion(float x, float y) {
     const auto h = ui_->hit(x, y);
     const std::string_view tag = h ? h->tag : "";
     win_.set_cursor(tag == "view" && link_.attached() ? Cursor::Move
-                    : tag == "hold" || tag == "part" || tag == "eyes" || tag == "reset" || tag == "use" || tag == "runtime-on" || tag == "runtime-off"
+                    : tag == "hold" || tag == "part" || tag == "eyes" || tag == "reset" || tag == "marker-here" || tag == "marker-remove" ||
+                      tag == "marker" || tag == "mfield" || tag == "use" || tag == "runtime-on" || tag == "runtime-off"
                     ? Cursor::Hand : Cursor::Arrow);
     dirty_ = true;
 }
@@ -660,6 +859,7 @@ int App::run(std::string* error) {
     if (!win_.open(title, 1280, 760, error)) return 1;
     win_.set_min_size(720, 520);
     win_.on_key = [this](int k, bool d, bool r, const Mods& m) { on_key(k, d, r, m); };
+    win_.on_char = [this](unsigned c) { on_char(c); };
     win_.on_button = [this](float x, float y, int b, bool p, int c) { on_button(x, y, b, p, c); };
     win_.on_motion = [this](float x, float y) { on_motion(x, y); };
     win_.on_scroll = [this](float dy) { on_scroll(dy); };
@@ -741,7 +941,8 @@ const char* session_state_name(int state) { return state_name(state); }
 // ---- headless ------------------------------------------------------------------------------------
 
 // THE SCRIPTED MOVE, once the application is drawing: the head turned 30 degrees to the left, the right
-// hand's trigger and A held, and the ArUco marker taken out of the room. The test client looks for exactly
+// hand's trigger and A held, the ArUco marker taken out of the room, and the QR code moved 30 cm left
+// (move-marker: the same marker). The test client looks for exactly
 // these.
 int App::headless(const std::string& dir) {
     if (!link_.attached()) { std::println(stderr, "openxr-sim: headless needs --headset"); return 2; }
@@ -758,6 +959,8 @@ int App::headless(const std::string& dir) {
             rig_.turn(-(30.0 * 3.14159265358979 / 180) / 0.005, 0);
             mouse_held_[1] = kTrigger | kPrimary;
             apply_input();
+            for (uint32_t i = 0; i < room_.count; i++)
+                if (room_.marker[i].kind == OXS_MARKER_QR) room_.marker[i].pose.p[0] = -0.3f;
             for (uint32_t i = 0; i < room_.count; i++)
                 if (room_.marker[i].kind == OXS_MARKER_ARUCO) {
                     std::copy(room_.marker + i + 1, room_.marker + room_.count, room_.marker + i);

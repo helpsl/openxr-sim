@@ -150,9 +150,20 @@ the room is the simulator's: a list of printed markers, each a pose in STAGE, a 
 
 * **The room as it starts** (`oxs_room_home`, common/xrmath.h), one of each kind, so an application finds
   markers with nothing set up: a QR code saying `openxr-sim` on the wall 2 m ahead at 1.5 m, 20 cm square;
-  a Micro QR code (`OXS`) 80 cm to its right, out of view once the head turns 30 degrees left; an ArUco marker (4x4_50, number 7) lying face up on a table 1.2 m ahead;
-  an AprilTag (36h11, number 3) on the wall to the left, out of view until the head turns towards it.
-  The control socket and the MCP server add, remove and reset them; the panel lists them, and which are in view.
+  a Micro QR code (`OXS`) 80 cm to its right, out of view once the head turns 30 degrees left; an ArUco
+  marker (4x4_50, number 7) lying face up on a table 1.2 m ahead; an AprilTag (36h11, number 3) on the wall
+  to the left, out of view until the head turns towards it.
+* **Changing the room** (moving, recoding and the panel's fields since 0.10.0): the control socket and the MCP server add, move, recode, remove and reset markers.
+  The panel lists them and which are in view; the one chosen (click it; the first otherwise) has its values
+  in fields to type into -- position, yaw, pitch and roll, side, code -- set with Enter or Tab, and "Bring
+  here" puts it a metre ahead of the headset, facing it. A marker **moved** keeps its serial: an application
+  sees the same entity move. A **new code** is a different printed marker, so it gets a new serial: the old
+  entity STOPPED, the new one there to discover.
+* **Orientation**: yaw about +Y (0 faces +Z, back towards the start), then pitch tilting the face up about
+  the marker's own +X (90 lies face up), then roll about its own +Z, out of the face (anticlockwise seen
+  from the front) -- in that order, the quaternion `Ry(yaw) Rx(-pitch) Rz(roll)` (`oxs_marker_orient`).
+  The simulator keeps the three as they were set; a face straight up or down would otherwise not tell yaw
+  from roll.
 * **Seen** (`oxs_marker_seen`): the marker's centre within the 90-degree field both eyes share, its printed
   face turned less than 70 degrees from the head, and its side at least a twentieth of its distance -- a 20 cm
   code is read to 4 m. One rule, shared by the runtime and the panel, so what the panel says is in view is
@@ -266,8 +277,10 @@ one, `\0openxr-sim/<uid>/<16 hex>`; on Windows a file, `%LOCALAPPDATA%\openxr-si
 | `hold HAND CONTROL...` / `release HAND [CONTROL...]` | trigger grip a b x y menu stick stick-up/down/left/right; held alongside the person's own |
 | `reset` | everything home, as R does |
 | `shot [MAX]` | both eyes side by side, each at most MAX pixels (default 512), as base64 PNG |
-| `markers` | the room's markers: serial, kind, position, the way the face looks (yaw, pitch), size, text or id, whether the headset sees it |
+| `markers` | the room's markers: serial, kind, position, yaw, pitch and roll, size, text or id, whether the headset sees it |
 | `add-marker KIND X Y Z YAW PITCH SIZE (ID \| TEXT...)` | KIND `qr`, `micro-qr`, `aruco-4x4-50` .. `aruco-7x7-1000`, `apriltag-16h5` .. `apriltag-36h11`; yaw 0 pitch 0 faces +Z, pitch 90 lies face up |
+| `move-marker SERIAL X Y Z YAW PITCH [ROLL [SIZE]]` | moves and turns it (yaw, then pitch, then roll); the same marker, its serial kept |
+| `set-marker-code SERIAL (ID \| TEXT...)` | a different code where it is: a new marker, with a new serial |
 | `remove-marker SERIAL` / `remove-marker all` | takes it away: an application tracking it sees it STOPPED |
 | `reset-markers` | the room as it starts |
 
@@ -280,8 +293,8 @@ it (`claude mcp add openxr-sim -- openxr-sim-mcp`) and gets the simulators as to
 `/proc/net/unix` and connects per call. (Linux only so far.) Tools: `list_simulators`, `launch` (an application started with
 `OPENXR_SIM_DEVICE=sim`, detached, its output in `~/.local/state/openxr-sim-mcp/`, waiting for its simulator
 to appear), `status`, `screenshot` (an image), `get_poses`, `set_pose`, `move`, `turn`, `press` (hold,
-150 ms, release), `hold`, `release`, `reset`, `list_markers`, `add_marker`, `remove_marker`,
-`reset_markers`. Each takes `simulator` (an id or its start) when more than one
+150 ms, release), `hold`, `release`, `reset`, `list_markers`, `add_marker`, `move_marker` (what
+it is not given stays as it is), `set_marker_code`, `remove_marker`, `reset_markers`. Each takes `simulator` (an id or its start) when more than one
 is running.
 
 ## Testing it
@@ -300,7 +313,8 @@ trigger and its thumb down for A; with `--hand-interaction`, it suggests only th
 checks the trigger arriving as the pinch, the pinch and poke poses against the grips, and -- with
 `--hands` too -- against the open hand's joints; with `--spatial`, it discovers the room's markers
 before and after the turn, in STAGE and in a space turned from it, makes anchors, and checks the Micro QR
-code the turn leaves PAUSED and the ArUco marker the script takes out of the room STOPPED);
+code the turn leaves PAUSED, the QR code the script moves the same entity, and the ArUco marker it takes out
+of the room STOPPED);
 when the session ends it writes the last frame's eyes (`left.ppm`, `right.ppm`), the window it would have
 drawn (`window.png`, and its layout faults) and a `summary`. The script then checks the pixels -- the
 square's corner is what catches a picture flipped or eyes swapped.

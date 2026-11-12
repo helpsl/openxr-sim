@@ -773,8 +773,8 @@ static void spatial_first(struct spatial_state *st, XrSession session, XrSpace s
     check(sp_xrCreateSpatialDiscoverySnapshotAsyncEXT(st->ctx, &bad, &fut) == XR_ERROR_SPATIAL_COMPONENT_NOT_ENABLED_EXT, "a component not enabled is refused");
 }
 
-// AFTER THE TURN: the AprilTag in view and discovered, the anchor with it; the Micro QR code out of view on
-// the right, PAUSED; the ArUco marker taken away, STOPPED.
+// AFTER THE TURN: the AprilTag in view and discovered, the anchor with it; the QR code moved, the same
+// entity; the Micro QR code out of view on the right, PAUSED; the ArUco marker taken away, STOPPED.
 static void spatial_second(struct spatial_state *st, XrSpace stage, XrTime t)
 {
     st->second_done = true;
@@ -804,8 +804,8 @@ static void spatial_second(struct spatial_state *st, XrSpace stage, XrTime t)
     query(up, 3, &u);
     const int q = index_of_id(&u, st->qr), m = index_of_id(&u, st->micro), r = index_of_id(&u, st->aruco);
     check(u.ok && u.n == 3 && q >= 0 && m >= 0 && r >= 0, "the three markers in it");
-    check(q >= 0 && u.state[q] == XR_SPATIAL_ENTITY_TRACKING_STATE_TRACKING_EXT && near3(u.bounds[q].center.position, 0, 1.5f, -2),
-          "the QR code TRACKING, where it was");
+    check(q >= 0 && u.state[q] == XR_SPATIAL_ENTITY_TRACKING_STATE_TRACKING_EXT && near3(u.bounds[q].center.position, -0.3f, 1.5f, -2),
+          "the QR code TRACKING, moved 30 cm left by the simulator");
     check(m >= 0 && u.state[m] == XR_SPATIAL_ENTITY_TRACKING_STATE_PAUSED_EXT, "the Micro QR code PAUSED, out of view");
     check(m >= 0 && u.bounds[m].extents.width == -1, "and its bounds left alone");
     check(r >= 0 && u.state[r] == XR_SPATIAL_ENTITY_TRACKING_STATE_STOPPED_EXT, "the ArUco marker STOPPED, taken away");

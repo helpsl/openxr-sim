@@ -108,6 +108,9 @@ void push_button(const char* tag, uint32_t index, std::string_view label, bool o
 void segmented(const char* tag, const std::vector<std::string>& labels, size_t selected);   // index i: the i'th label
 void toggle(const char* tag, uint32_t index, bool on);
 void badge(std::string_view label, Tone tone, bool strong = false);
+// A value to type into: `label` dim before it, `value` the text; while `editing`, outlined in the accent
+// (in the warning colour when `bad`) with a caret after the text.
+void field(const char* tag, uint32_t index, std::string_view label, std::string_view value, bool editing, bool bad, Size w);
 void caps(std::string_view s);   // a card's small heading
 
 // A card: a column of its own, on the card colour, rounded, inset.

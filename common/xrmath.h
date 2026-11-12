@@ -143,9 +143,29 @@ static inline uint32_t oxs_marker_dict_size(int kind, int dict)
     return 0;
 }
 
-// A marker's orientation from where its printed face looks: `yaw` turns it about +Y (0 faces +Z, back
-// towards the start; 90 degrees faces +X), `pitch` tilts the face up (90 degrees: lying face up).
-static inline void oxs_marker_facing(float yaw, float pitch, float q[4]) { oxs_quat_from_euler(yaw, -pitch, 0, q); }
+// A MARKER'S ORIENTATION, in this order: `yaw` turns it about +Y (0 faces +Z, back towards the start; 90
+// degrees faces +X), then `pitch` tilts its face up about its own +X (90 degrees: lying face up), then
+// `roll` turns it about its own +Z, out of its face (positive anticlockwise, seen from the front).
+static inline void oxs_marker_orient(float yaw, float pitch, float roll, float q[4]) { oxs_quat_from_euler(yaw, -pitch, roll, q); }
+static inline void oxs_marker_facing(float yaw, float pitch, float q[4]) { oxs_marker_orient(yaw, pitch, 0, q); }
+
+// The yaw, pitch and roll oxs_marker_orient makes q from, in radians. With the face straight up or down
+// yaw and roll turn about the same axis, and roll is taken as 0.
+static inline void oxs_marker_angles(const float q[4], float *yaw, float *pitch, float *roll)
+{
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    const float m02 = 2 * (x * z + w * y), m12 = 2 * (y * z - w * x), m22 = 1 - 2 * (x * x + y * y);
+    const float m10 = 2 * (x * y + w * z), m11 = 1 - 2 * (x * x + z * z);
+    *pitch = asinf(m12 > 1 ? 1 : m12 < -1 ? -1 : m12);
+    if (fabsf(m12) < 0.99999f) {
+        *yaw = atan2f(m02, m22);
+        *roll = atan2f(m10, m11);
+    } else {   // face up or down: R = Ry(yaw) Rx(-+90 degrees), roll 0
+        const float m00 = 1 - 2 * (y * y + z * z), m20 = 2 * (x * z - w * y);
+        *yaw = atan2f(-m20, m00);
+        *roll = 0;
+    }
+}
 
 static inline void oxs_room_home(struct oxs_room *room)
 {

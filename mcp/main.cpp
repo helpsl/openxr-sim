@@ -374,6 +374,34 @@ Result call(const std::string& name, const Json::Value& args) {
         if (!s.isIntegral()) return failed("`serial` is a marker's serial, from list_markers, or \"all\"");
         return relay(*id, std::format("remove-marker {}", s.asInt64()));
     }
+    if (name == "move_marker" || name == "set_marker_code") {
+        if (!args["serial"].isIntegral()) return failed("`serial` is a marker's serial, from list_markers");
+        const int64_t serial = args["serial"].asInt64();
+        if (name == "set_marker_code") {
+            std::string code;
+            if (args["text"].isString()) {
+                code = args["text"].asString();
+                if (code.empty() || code.find_first_of("\r\n") != std::string::npos) return failed("`text` is a QR code's text, on one line");
+            } else if (args["id"].isIntegral()) {
+                code = std::to_string(args["id"].asInt64());
+            } else {
+                return failed("give a QR code's `text`, or an ArUco marker's or AprilTag's `id`");
+            }
+            return relay(*id, std::format("set-marker-code {} {}", serial, code));
+        }
+        // What is not given stays as it is: the marker's present pose, from the simulator.
+        const auto v = ask(*id, "markers", &error);
+        if (!v) return failed(error);
+        const Json::Value* now = nullptr;
+        for (const Json::Value& m : (*v)["markers"])
+            if (m["serial"].asInt64() == serial) now = &m;
+        if (now == nullptr) return failed(std::format("no marker {} in the room", serial));
+        const Json::Value& p = args.isMember("position") ? args["position"] : (*now)["position"];
+        if (!p.isArray() || p.size() != 3) return failed("`position` must be [x, y, z] in metres");
+        return relay(*id, std::format("move-marker {} {} {} {} {} {} {} {}", serial, num(p[0]), num(p[1]), num(p[2]),
+                                      num(args.get("yaw", (*now)["yaw"])), num(args.get("pitch", (*now)["pitch"])),
+                                      num(args.get("roll", (*now)["roll"])), num(args.get("size", (*now)["size"]))));
+    }
     if (name == "add_marker") {
         const std::string kind = args.get("kind", "").asString();
         const Json::Value& p = args["position"];
@@ -546,6 +574,29 @@ Json::Value tools() {
         p["serial"]["type"].append("integer");
         p["serial"]["type"].append("string");
         list.append(tool("remove_marker", "Take a marker out of the room: an application tracking it sees it stop.", p, { "serial" }));
+    }
+    {
+        Json::Value p;
+        p["serial"] = prop("integer", "The marker's serial, from list_markers.");
+        Json::Value pos = prop("array", "[x, y, z] of its centre, metres, in STAGE (default: where it is).");
+        pos["items"]["type"] = "number";
+        p["position"] = pos;
+        p["yaw"] = prop("number", "Degrees the way its printed face looks: 0 faces +Z, 90 faces +X (default: as it is).");
+        p["pitch"] = prop("number", "Degrees its face tilts up, after the yaw: 90 lies face up (default: as it is).");
+        p["roll"] = prop("number", "Degrees it turns about its own face, after the pitch; anticlockwise seen from the front "
+                                   "(default: as it is).");
+        p["size"] = prop("number", "Its side in metres (default: as it is).");
+        list.append(tool("move_marker", "Move or turn a marker in the room: turned by yaw, then pitch, then roll. It stays the "
+                                        "same marker: an application tracking it sees it move, by the same entity id.", p, { "serial" }));
+    }
+    {
+        Json::Value p;
+        p["serial"] = prop("integer", "The marker's serial, from list_markers.");
+        p["text"] = prop("string", "A QR or Micro QR code's new text.");
+        p["id"] = prop("integer", "An ArUco marker's or AprilTag's new number in its dictionary.");
+        list.append(tool("set_marker_code", "Print a different code on a marker, where it is. To an application that is a "
+                                            "different marker: the old one stops, and a new one (a new serial) is there to "
+                                            "discover.", p, { "serial" }));
     }
     list.append(tool("reset_markers", "The room's markers as they start: a QR code ahead, a Micro QR code beside it, an ArUco "
                                       "marker on a table and an AprilTag on the wall to the left."));

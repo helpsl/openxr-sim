@@ -558,3 +558,29 @@ Verified (2026-11-11): `tests/sim-test.sh`, all eight runs, the new `spatial` on
 STAGE and in a space turned 90 degrees and moved from it; the Windows build's `--spatial` under Wine, 3 in
 3. The Windows CI job runs it with D3D11 as well. Our own client against our own reading of the
 specification: no CTS.
+
+## Markers moved, turned and recoded (0.10.0, 2026-11-12)
+
+The owner: "make it so that we can move the qr markers around, and is it possible to set what data the qr
+markers represent", then "a gui to set the translation, yaw, pitch, and roll (rotation should apply in that
+order to build the resulting quaternion)". DESIGN.md, "Spatial entities", "Changing the room".
+
+* **Moved is the same marker, recoded is another.** `move-marker` keeps the serial, so an application sees
+  its entity move; `set-marker-code` gives a new serial, the old entity STOPPED -- a printed code is what a
+  marker is, and the runtime's entities are keyed by serial, so a code changing under an entity id would be
+  something no real marker does.
+* **Yaw, pitch, roll** in that order, intrinsic: `Ry(yaw) Rx(-pitch) Rz(roll)` (`oxs_marker_orient`).
+  Pitch keeps add-marker's sign, positive tilting the face up (90 face up), hence the minus. The angles are
+  kept as they were set (`App::angles_`, by serial) and otherwise read back from the quaternion
+  (`oxs_marker_angles`): with the face straight up or down yaw and roll are one axis, and the ArUco marker
+  on the table is exactly that.
+* **The panel's fields** are the control socket's commands: a field set builds `move-marker` or
+  `set-marker-code` from it and the other values exactly (not as shown, rounded), so the checks and the
+  new serial are the same whichever way a marker is changed. Typing takes the keyboard -- the movement keys,
+  Tab and Escape included -- until Enter, Tab, Escape or a click elsewhere. GLFW's character callback
+  (`Window::on_char`) gives the text as the layout makes it.
+* Checked: `tests/sim-test.sh`, all eight runs, the headless script now also moving the QR code 30 cm and
+  the client finding it there by the same id; the panel drawn headless at 1280x1700 with the editor open
+  for the QR code, 0 layout faults; the MCP tools against a running simulator (move, turn with roll, size,
+  recode -- unchanged, new text, an ArUco number out of its dictionary -- and reset). Typing into the
+  panel's fields was not driven by a test.

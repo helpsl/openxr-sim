@@ -422,6 +422,27 @@ void toggle(const char* tag, uint32_t index, bool on) {
     Box k(knob);
 }
 
+void field(const char* tag, uint32_t index, std::string_view label, std::string_view value, bool editing, bool bad, Size w) {
+    const Theme& t = theme();
+    const bool hov = Ui::current().hovered(tag, index);
+    Style s;
+    s.tag = tag;
+    s.index = index;
+    s.w = w;
+    s.row = true;
+    s.gap = px(Space::XS);
+    s.pad_x = px(Space::S);
+    s.pad_y = 5;
+    s.align_y = CLAY_ALIGN_Y_CENTER;
+    s.background = t.well;
+    s.border = editing ? (bad ? t.warning : t.accent) : hov ? t.dim : t.line;
+    s.radius = kRadiusSmall;
+    s.clip_x = true;
+    Box b(s);
+    if (!label.empty()) text(label, Role::Secondary, t.dim);
+    text(editing ? std::string(value) + "|" : std::string(value), Role::Secondary, t.text, { .mono = true });
+}
+
 void badge(std::string_view label, Tone tone, bool strong) {
     const Rgba c = tone_colour(tone);
     Style s;

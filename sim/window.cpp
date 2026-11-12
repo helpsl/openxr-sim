@@ -88,6 +88,10 @@ bool Window::open(const std::string& title, int w, int h, std::string* error) {
         Window* s = self(g);
         if (s->on_key && key != GLFW_KEY_UNKNOWN) s->on_key(key, action != GLFW_RELEASE, action == GLFW_REPEAT, mods_of(m));
     });
+    glfwSetCharCallback(win_, [](GLFWwindow* g, unsigned codepoint) {
+        Window* s = self(g);
+        if (s->on_char) s->on_char(codepoint);
+    });
     glfwSetMouseButtonCallback(win_, [](GLFWwindow* g, int button, int action, int) {
         Window* s = self(g);
         int clicks = 1;

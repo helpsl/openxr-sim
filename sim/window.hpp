@@ -53,6 +53,8 @@ public:
 
     // Keys by GLFW key code (layout-independent: W is where W is on a US keyboard).
     std::function<void(int key, bool down, bool repeat, const Mods&)> on_key;
+    // Text typed, a Unicode code point at a time, as the keyboard layout makes it.
+    std::function<void(unsigned codepoint)> on_char;
     // Left = 0, right = 1, middle = 2; `clicks` counts a double-click as 2.
     std::function<void(float x, float y, int button, bool pressed, int clicks)> on_button;
     std::function<void(float x, float y)> on_motion;

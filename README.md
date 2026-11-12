@@ -19,7 +19,7 @@ It began as LOS's runtime (`apps/los-openxr`) and is its own project since 0.7.0
 * `XR_EXT_spatial_entity` with `XR_EXT_spatial_marker_tracking` (QR, Micro QR, ArUco and AprilTag codes
   printed round a simulated room, found when the headset looks at them) and `XR_EXT_spatial_anchor`.
 * A control socket and `openxr-sim-mcp`, an MCP server: see both eyes, set and move poses, hold buttons,
-  put markers up and take them down.
+  put markers up, move them, change their codes and take them down -- or do that in the window's panel.
 
 `docs/DESIGN.md` says how it works and why; `docs/NOTES.md` is what was found out on the way.
 

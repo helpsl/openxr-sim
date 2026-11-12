@@ -21,9 +21,11 @@
 #include "window.hpp"
 #include "xrmath.h"
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -78,6 +80,10 @@ private:
     std::string poses_json() const;
     std::string markers_json() const;
     std::string marker_command(const std::vector<std::string>& w);
+    // A marker's yaw, pitch and roll in degrees (oxs_marker_orient): as they were set, else from its pose.
+    std::array<double, 3> marker_angles(const oxs_marker& m) const;
+    // Puts a marker at `p` (STAGE metres), turned by yaw, pitch and roll in degrees, keeping those.
+    void place_marker(oxs_marker& m, const double p[3], const std::array<double, 3>& ypr);
 
     std::string app_name_;
     Link link_;
@@ -85,6 +91,20 @@ private:
     // THE ROOM'S MARKERS (DESIGN.md, "Spatial entities"): what the runtime reports when the headset sees them.
     oxs_room room_{};
     uint32_t next_serial_ = OXS_ROOM_HOME_SERIALS + 1;
+    std::map<uint32_t, std::array<double, 3>> angles_;   // by serial: the yaw, pitch and roll a marker was given
+
+    // THE PANEL'S MARKER EDITOR: the marker chosen (by serial; the first when it is gone) and the value being
+    // typed -- field 0..2 X Y Z, 3..5 yaw pitch roll, 6 size, 7 the code; -1 none.
+    uint32_t chosen_marker_ = 0;
+    int edit_ = -1;
+    std::string edit_text_;
+    bool edit_bad_ = false;
+    std::string edit_error_;
+    const oxs_marker* chosen() const;
+    std::string field_value(const oxs_marker& m, int field) const;
+    void begin_edit(int field);
+    bool commit_edit();   // false: the text is no value, and the field stays open
+    void on_char(unsigned codepoint);
     EyePixels eyes_[2];
     ImageView eye_view_[2];
     oxs_shm_status status_{};
